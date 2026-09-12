@@ -15,6 +15,7 @@ from bootstrap import ROOT
 from studio_bible_workbench import short_ticket
 from studio_core import StudioError, LockError, atomic_write_json, session_lock, utc_now
 from studio_construction_history import read_event
+from opencode_server import OpenCodeServer
 
 ACTIVE = {"starting", "running", "stopping"}
 
@@ -53,11 +54,14 @@ def executable(provider):
     return str(path)
 
 
-def command(provider, binary, workspace, prompt):
+def command(provider, binary, workspace, prompt, server=None, platform_session=None):
     if provider == "codex":
         return [binary, "exec", "--json", "--color", "never", "--sandbox", "workspace-write",
                 "-c", 'approval_policy="never"', "--skip-git-repo-check", "-C", str(workspace), "-"], prompt
-    return [binary, "run", "--format", "json", "--dir", str(workspace), prompt], None
+    args = [binary, "run", "--format", "json", "--dir", str(workspace)]
+    if provider == "opencode_server":
+        args += ["--attach", server.url, "--session", platform_session]
+    return [*args, prompt], None
 
 
 class AgentRunner:
@@ -81,6 +85,14 @@ class AgentRunner:
             except StudioError as exc:
                 desktop = name == "opencode" and opencode_installation()[0] is not None
                 rows.append({"id": name, "available": False, "desktop_available": desktop, "reason": str(exc)})
+        try:
+            conn = OpenCodeServer.configured(self.service.workspace)
+            executable("opencode")
+            version = conn.health()
+            rows.append({"id": "opencode_server", "available": True, "server_url": conn.url,
+                         "version": version, "hint": f"连接 {conn.url}（OpenCode {version}）。桌面端连接同一服务并打开此工作区即可查找任务。"})
+        except StudioError as exc:
+            rows.append({"id": "opencode_server", "available": False, "reason": str(exc)})
         return {"providers": rows}
 
     def ticket_info(self, ticket_path):
@@ -141,14 +153,15 @@ class AgentRunner:
         job = json.loads(path.read_text(encoding="utf-8"))
         # A crashed backend is never silently restarted. A surviving writer's lock is retained.
         if job["status"] in ACTIVE and job_id != self.active:
-            job["status"] = "unknown" if (self.folder / ".session.lock").exists() else "interrupted"
+            job["status"] = "unknown" if job.get("server_pending") or (self.folder / ".session.lock").exists() else "interrupted"
             job["message"] = "后台连接已中断；先确认原任务已停止，再重试或复制恢复小票。"
         return job
 
     def start(self, ticket_path, provider, retry=False):
         if type(retry) is not bool:
             raise StudioError("retry 必须为布尔值")
-        binary = executable(provider)
+        binary = executable("opencode" if provider == "opencode_server" else provider)
+        conn = OpenCodeServer.configured(self.service.workspace) if provider == "opencode_server" else None
         info = self.ticket_info(ticket_path)
         job_id = hashlib.sha256(info["ticket_path"].encode()).hexdigest()[:32]
         with self.mutex:
@@ -167,7 +180,7 @@ class AgentRunner:
             started = threading.Event()
             errors = []
             self.worker = threading.Thread(target=self._run,
-                args=(job_id, info, provider, binary, started, errors), daemon=True)
+                args=(job_id, info, provider, binary, started, errors, conn), daemon=True)
             self.worker.start()
         if not started.wait(10):
             raise StudioError("任务正在启动，请刷新查看状态；不要重复发送。")
@@ -190,7 +203,7 @@ class AgentRunner:
             job["reply"] = event.get("data", {}).get("transcript", {}).get("assistant", job["reply"])
         self._save(job, status="completed", message="已提交，工作台会自动更新。", **updates)
 
-    def _run(self, job_id, info, provider, binary, started, errors):
+    def _run(self, job_id, info, provider, binary, started, errors, conn=None):
         job = {"id": job_id, **info, "provider": provider, "created_at": utc_now(),
                "status": "starting", "message": "正在启动 Agent", "reply": ""}
         proc = None
@@ -199,6 +212,11 @@ class AgentRunner:
             # One dispatch at a time across all workbench processes for this workspace.
             # This is a dispatch lock, separate from short-lived story transaction locks.
             with session_lock(self.folder):
+                # Durable protection: a remote writer can outlive both CLI and workbench.
+                for path in self.folder.glob("*.json"):
+                    previous = json.loads(path.read_text(encoding="utf-8"))
+                    if previous.get("server_pending"):
+                        raise StudioError("共享后台还有未确认停止的任务，请先在原任务点击停止并确认 session 已结束，再重试。")
                 try:
                     current = self.result(info)
                     if current["status"] == "committed" and not current.get("needs_finish"):
@@ -220,10 +238,22 @@ class AgentRunner:
                               "If blocked, stop and explain; preserve the original operation ID. "
                               "Use the CLI fallback for this exact workspace if MCP points elsewhere.\n\n"
                               + short_ticket(self.service.workspace, Path(info["ticket_path"])))
-                    args, stdin = command(provider, binary, self.service.workspace, prompt)
+                    if conn:
+                        version = conn.health()
+                        conn.check_workspace()
+                        if self.cancel.is_set():
+                            self._save(job, status="stopped", message="生成已停止，小票仍保留。")
+                            return
+                        sid = conn.create(f"Story Bible · {info['project']} · {job_id[:8]}")
+                        self._save(job, platform_session=sid, server_url=conn.url, server_version=version)
+                        args, stdin = command(provider, binary, self.service.workspace, prompt, conn, sid)
+                    else:
+                        args, stdin = command(provider, binary, self.service.workspace, prompt)
                     env = os.environ.copy()
                     env.pop("CODEX_THREAD_ID", None)
                     env["PYTHONIOENCODING"] = "utf-8"
+                    if conn:
+                        conn.env(env)
                     # Make the project's Python available to ticket commands even from desktop launchers.
                     python_dir = ROOT / ".venv-workbench" / ("Scripts" if os.name == "nt" else "bin")
                     if python_dir.is_dir():
@@ -232,6 +262,9 @@ class AgentRunner:
                         if self.cancel.is_set():
                             self._save(job, status="stopped", message="生成已停止，小票仍保留。")
                             return
+                        if conn:
+                            # Persist before the child can send its prompt.
+                            self._save(job, server_pending=True)
                         self.process = subprocess.Popen(args, cwd=self.service.workspace, env=env,
                             stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
@@ -253,10 +286,12 @@ class AgentRunner:
                             continue
                         if not isinstance(event, dict):
                             continue
-                        if event.get("type") == "thread.started":
+                        if event.get("type") == "thread.started" and not conn:
                             job["platform_session"] = event.get("thread_id")
-                        if event.get("sessionID"):
+                        if event.get("sessionID") and not conn:
                             job["platform_session"] = event["sessionID"]
+                        if conn and event.get("sessionID") not in {None, job["platform_session"]}:
+                            raise StudioError("OpenCode CLI 返回了其他 session 的事件，已停止本次连接。")
                         item = event.get("item") or {}
                         if event.get("type") == "item.completed" and item.get("type") == "agent_message":
                             job["reply"] = str(item.get("text", ""))[-16000:]
@@ -265,7 +300,12 @@ class AgentRunner:
                         if event.get("type") == "error":
                             error = event.get("error") or event
                             job["reply"] = str(error.get("message", "平台返回错误，请检查 CLI 登录与权限。"))[-2000:]
+                        if conn:
+                            job["reply"] = conn.redact(job["reply"])
                     code = proc.wait()
+                    if conn:
+                        # Exiting the attached CLI alone is not proof the remote writer stopped.
+                        self._settle_server(job, conn)
                     current = self.result(info)
                     if current["status"] == "committed" and not current.get("needs_finish"):
                         self._completed(job, info, current, exit_code=code)
@@ -277,7 +317,17 @@ class AgentRunner:
                 except Exception as exc:
                     if proc and proc.poll() is None:
                         self._terminate(proc)
-                    self._save(job, status="failed", message=f"生成未完成：{exc}")
+                    if conn and job.get("server_pending"):
+                        try:
+                            self._settle_server(job, conn)
+                        except StudioError:
+                            self._save(job, status="unknown", message="CLI 连接已结束，但尚未确认服务器任务停止；请恢复服务连接后点击停止，确认前不会重复生成。")
+                    if not job.get("server_pending"):
+                        current = self.result(info)
+                        if current["status"] == "committed" and not current.get("needs_finish"):
+                            self._completed(job, info, current)
+                        else:
+                            self._save(job, status="failed", message=f"生成未完成：{conn.redact(exc) if conn else exc}")
         except LockError:
             errors.append("另一个工作台进程正在生成，或上次中断留下了调度锁。请先确认原进程状态，不能重复启动。")
         except Exception as exc:
@@ -298,12 +348,34 @@ class AgentRunner:
     def stop(self, job_id):
         with self.mutex:
             if self.active != job_id:
-                return self.status(job_id)
+                job = self.status(job_id)
+                if not job.get("server_pending"):
+                    return job
+                if self.active:
+                    raise StudioError("请先等待当前任务退出。")
+                # A crash leaves this lock behind: never race an unowned surviving CLI.
+                with session_lock(self.folder):
+                    conn = OpenCodeServer.configured(self.service.workspace)
+                    if conn.url != job.get("server_url"):
+                        raise StudioError("连接地址已改变，请恢复原任务的 OpenCode 服务地址后再停止。")
+                    self._settle_server(job, conn)
+                    current = self.result(job)
+                    if current["status"] == "committed" and not current.get("needs_finish"):
+                        self._completed(job, job, current)
+                    else:
+                        self._save(job, status="stopped", message="已确认共享后台 session 停止；原小票和草稿保留，可重试。")
+                return job
             self.cancel.set()
+            job = self.status(job_id)
+            self._save(job, status="stopping", message="正在停止生成并确认后台状态。")
             proc = self.process
             if proc and proc.poll() is None:
                 self._terminate(proc)
         return self.status(job_id)
+
+    def _settle_server(self, job, conn):
+        conn.abort(job["platform_session"])
+        self._save(job, server_pending=False)
 
     @staticmethod
     def _terminate(proc):

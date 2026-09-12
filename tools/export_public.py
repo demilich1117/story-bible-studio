@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = ".public-export.json"
 ALLOWED_ROOT_FILES = {
     "README.md", "AGENTS.md", "requirements.txt", "启动工作台.cmd",
-    "安装MCP.ps1", "public-files.json",
+    "安装MCP.ps1", "public-files.json", "启动OpenCode共享后台.cmd",
 }
 ALLOWED_TREES = (".agents/skills/story-bible-studio/", "workbench/", "tests/", "docs/", "tools/")
 ALLOWED_SUFFIXES = {".md", ".py", ".json", ".yaml", ".yml", ".txt", ".cmd", ".ps1", ".js", ".cjs", ".css", ".html", ".svg", ".gitignore"}

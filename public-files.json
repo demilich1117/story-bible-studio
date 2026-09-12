@@ -60,6 +60,7 @@
   "tests/test_construction_behaviors.py",
   "tests/test_context_behaviors.py",
   "tests/test_output_modules.py",
+  "tests/test_opencode_server.py",
   "tests/test_profile_nsfw_validation.py",
   "tests/test_prose_targets.py",
   "tests/test_public_export.py",
@@ -73,6 +74,7 @@
   "workbench/agent_runner.py",
   "workbench/bootstrap.py",
   "workbench/mcp_server.py",
+  "workbench/opencode_server.py",
   "workbench/README.md",
   "workbench/requirements-mcp.txt",
   "workbench/server.py",
@@ -85,5 +87,6 @@
   "workbench/static/index.html",
   "workbench/static/style.css",
   "启动工作台.cmd",
+  "启动OpenCode共享后台.cmd",
   "安装MCP.ps1"
 ]

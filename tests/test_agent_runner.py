@@ -244,7 +244,8 @@ def fake_cli():
         print(json.dumps({"type":"thread.started", "thread_id":"fake-thread"}))
         print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":"河岸和钟楼都保留。"}}))
     else:
-        print(json.dumps({"type":"text", "sessionID":"fake-opencode", "part":{"text":"河岸和钟楼都保留。"}}))
+        sid = provider.removeprefix("shared:") if provider.startswith("shared:") else "fake-opencode"
+        print(json.dumps({"type":"text", "sessionID":sid, "part":{"text":"河岸和钟楼都保留。"}}))
 
 
 if __name__ == "__main__" and "--fake" in sys.argv:

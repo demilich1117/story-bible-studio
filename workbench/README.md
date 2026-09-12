@@ -43,7 +43,7 @@ python -B workbench/server.py --open
 
 OpenCode 桌面版与 CLI 分开检测。Windows 还会检查桌面安装目录中的 `resources/opencode-cli.exe` 和桌面版的版本化 CLI 缓存。部分桌面版本使用内嵌后台，未提供独立 CLI，此时显示「仅检测到桌面版」，仍可复制小票到桌面版；不能把 `OpenCode.exe` 图形程序当成 `opencode run` 使用。
 
-当前是 CLI 接入：Codex 使用 `codex exec --json`，OpenCode 使用 `opencode run --format json`。生成过程由平台 Agent 执行工具和提交，并非直接调用裸模型 API；也不保证自动显示到已经打开的桌面聊天窗口。每次创建干净的平台上下文，按指定小票恢复文件化上下文，不自动复用上一次或其他故事的聊天历史。
+Codex 使用 `codex exec --json`，OpenCode 本地生成使用 `opencode run --format json`；「OpenCode · 共享后台」使用下节的 `run --attach` 通道。生成过程由平台 Agent 执行工具和提交，并非直接调用裸模型 API。独立 CLI 不保证自动显示到已经打开的桌面聊天窗口。每次创建干净的平台上下文，按指定小票恢复文件化上下文，不自动复用上一次或其他故事的聊天历史。
 
 Codex 使用 `workspace-write` 沙箱并将需额外审批的操作拒绝；OpenCode 沿用本机权限配置，不开启自动批准。若登录、权限或上下文预算阻塞，保留原小票并显示未完成。可调整环境后点击「重试原任务」，也可查看小票转交交互式 Agent。重试可切换已安装的平台，仍使用原请求；构筑与 RP 都不能绕过原事务改用新的操作 ID。
 
@@ -52,6 +52,41 @@ Codex 使用 `workspace-write` 沙箱并将需额外审批的操作拒绝；Open
 任务状态存入工作区 `.workbench/agent-jobs/`，不进入故事事件或 Git；这里只保存任务元信息和对外回复，不保存工具输出或内部推理。页面偏好与最近任务索引在浏览器本地保存。清空浏览器数据会失去该索引，原小票和文件化事务仍保留。
 
 接口参考：[Codex 非交互模式](https://developers.openai.com/codex/noninteractive)、[OpenCode CLI](https://opencode.ai/docs/cli/)。本机 CLI 版本与登录状态需单独验证；模拟测试通过不代表真实模型已连通。
+
+## OpenCode · 共享后台
+
+此通道保留 CLI 调度，用 `opencode run --attach <服务地址> --session <本次新建ID>` 连接常驻 OpenCode 1.x 服务。桌面端连接同一服务并打开同一工作区后，可以在该服务器中查找工作台创建的 session。会话标题以 `Story Bible · 作品名` 开头；工作台显示服务地址并可复制 session ID。不会自动切换桌面端当前服务器或复用已有聊天。
+
+### 首次使用
+
+1. 确认本机 `opencode run --help` 提供 `--attach`、`--session`、`--password`、`--username`。只安装了不附带 CLI 的桌面版仍需单独安装 CLI。
+2. 双击根目录 `启动OpenCode共享后台.cmd`，保持这个服务窗口打开。首次默认使用 `http://127.0.0.1:4096`，生成随机密码并保存到本机 `.workbench/opencode-server.json`；以后启动复用该配置。该目录已被 Git 忽略。端口占用时程序不会停止其他服务。
+3. 在 OpenCode 桌面端的服务器选择入口添加这个地址，填写配置文件中的 `username` 和 `password`，并打开本工作区的绝对路径。Windows 工作区连接同机 Windows 服务；本通道不做 WSL 路径映射。
+4. 重启工作台后台以加载新代码。在生成方式选择「OpenCode · 共享后台」，点击「检查生成连接」。以后仅修改连接文件时无需重启，重新检查即可。
+5. 正常发送构筑或续玩。每次分配新的平台 session，重试仍使用原工作台小票和原事务。生成中请等待工作台确认完成后，再在桌面里续接该 session。
+
+共享服务上的模型、登录、工具和权限取决于服务启动时的环境及工作区配置。启动助手把工作台虚拟环境 Python 加入服务 PATH。连接共享服务不会改变模型质量，也不会自动批准权限请求。
+
+### 已有服务或自定义端口
+
+可以直接连接已经配置好认证的服务，无需再启动一份：
+
+```powershell
+python -B workbench/opencode_server.py configure --url http://127.0.0.1:4096 --ask-password
+python -B workbench/opencode_server.py check
+```
+
+`--ask-password` 使用隐藏输入；自定义用户名加 `--username <用户名>`。不加该选项时密码来自 `OPENCODE_SERVER_PASSWORD`，未设置则为空。`configure` 只保存工作台连接，不修改服务或桌面设置；`check` 校验健康状态、1.x 版本和工作目录，不创建 session 或调用模型。自定义工作区给这些命令添加 `--workspace <绝对路径>`。
+
+也可在启动工作台的环境中设置 `STORY_STUDIO_OPENCODE_SERVER_URL`、`OPENCODE_SERVER_USERNAME` 和 `OPENCODE_SERVER_PASSWORD`，分别覆盖连接文件中的值。只接受带明确端口的回环 HTTP 地址，不接受内嵌用户名/密码、代理路径或远程地址。密码通过子进程环境传递，不进入命令参数、网页 localStorage 或生成任务记录。
+
+### 停止与恢复
+
+停止会先结束本次 CLI，再调用该 session 的取消接口并核验空闲；不会停止整个共享服务或其他 session。CLI 正常退出也会核验服务器任务结束，然后以核心提交结果判定完成。
+
+如果取消时服务断线，显示「未确认」并保留 session ID。所有新的直接生成会被阻止，恢复原服务连接后点击「停止并确认后台任务」；确认后才能重试。迟到的核心提交会被识别为完成，不重复生成。若工作台进程崩溃并留下调度锁，仍须先检查原进程，不能自动删锁或盲目重发。
+
+已验证：本机 OpenCode CLI/服务 1.18.30 的真实 `--attach` 简短生成、session ID 一致性和取消确认；另有真实核心配合模拟服务的提交、重试、断线恢复测试。桌面界面展示尚未自动化实测，需要连接上述同一服务后查看。桌面版本 1.18.29 的内嵌服务不是默认共享地址，不自动提取其临时密码。
 
 ## 可选 MCP
 
