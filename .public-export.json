@@ -43,7 +43,6 @@
     ".gitignore",
     "AGENTS.md",
     "README.md",
-    "docs/github.md",
     "public-files.json",
     "requirements.txt",
     "tests/bible_fixture.py",
