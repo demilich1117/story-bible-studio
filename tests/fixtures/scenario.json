@@ -1,0 +1,9 @@
+{
+  "title": "雾港钟楼",
+  "character": "Mira Chen",
+  "nickname": "米拉",
+  "promise": "星期五日落前把铜钥匙交还钟楼管理员。",
+  "secret": "只有米拉和送信人知道蓝色信封藏在旧地图后面。",
+  "resolved": "铜钥匙已经归还，管理员在收据上签了名。",
+  "scene": {"characters": ["米拉", "送信人"], "location": "钟楼门厅", "open_event": "核对蓝色信封上的时间"}
+}

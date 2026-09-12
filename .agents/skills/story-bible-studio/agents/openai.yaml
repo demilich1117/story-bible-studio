@@ -1,0 +1,6 @@
+interface:
+  display_name: "Story Bible Studio"
+  short_description: "连续故事、角色扮演与设定记忆工作流"
+  default_prompt: "使用 $story-bible-studio 为我的作品继续故事创作或角色扮演，并维护可检索的长期记忆。"
+policy:
+  allow_implicit_invocation: true
