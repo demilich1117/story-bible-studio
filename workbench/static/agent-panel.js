@@ -22,7 +22,7 @@ export class AgentPanel {
   async init(){
     try{this.providers=(await this.api('agent_providers')).providers;}catch{this.providers=[];}
     this.select.value=this.read('agent-provider')||'manual';if(!this.select.value)this.select.value='manual';
-    for(const item of this.providers){if(!item.available)this.select.querySelector(`[value="${item.id}"]`).textContent+=( ' · 未检测到');}
+    for(const item of this.providers){if(!item.available)this.select.querySelector(`[value="${item.id}"]`).textContent+=item.desktop_available?' · 仅检测到桌面版':' · 未检测到 CLI';}
     this.hint();this.changed();this.timer=setInterval(()=>this.poll(),2000);
   }
   hint(){const p=this.providers?.find(p=>p.id===this.select.value);this.root.querySelector('#agent-hint').textContent=p&&!p.available?p.reason:this.select.value==='manual'?'复制小票后交给你选择的 Agent。':'使用本机平台账号与默认模型，每次从当前任务的已保存上下文开始。';}

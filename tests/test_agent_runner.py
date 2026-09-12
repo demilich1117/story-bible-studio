@@ -13,7 +13,7 @@ from studio_core import StudioError, create_session, read_events, session_lock
 from studio_workbench import StudioService
 
 sys.path.insert(0, str(ROOT / "workbench"))
-from agent_runner import AgentRunner, command
+from agent_runner import AgentRunner, command, executable
 from server import DinerServer
 
 
@@ -56,7 +56,7 @@ class AgentRunnerTests(StudioCase):
         text = '原文带有引号 " & $(echo secret) 和换行\n先比较两种方向。'
         req = self.ticket(text)
         job = self.finish(self.launch(req))
-        self.assertEqual("completed", job["status"])
+        self.assertEqual("completed", job["status"], job)
         self.assertEqual("fake-thread", job["platform_session"])
         self.assertIn("河岸", job["reply"])
         self.assertIn("先调查哪里？", job["reply"])
@@ -72,13 +72,14 @@ class AgentRunnerTests(StudioCase):
         self.assertEqual("incomplete", job["status"])
         original = self.service.bible_view(self.p, request_id=req["id"])["operation_id"]
         job = self.finish(self.launch(req, retry=True, provider="opencode"))
-        self.assertEqual("completed", job["status"])
+        self.assertEqual("completed", job["status"], job)
         self.assertEqual(original, self.service.bible_view(self.p, request_id=req["id"])["operation_id"])
         self.assertEqual("fake-opencode", job["platform_session"])
 
     def test_completed_retry_and_reload_do_not_generate_again(self):
         req = self.ticket()
         job = self.finish(self.launch(req))
+        self.assertEqual("completed", job["status"], job)
         before = (self.project / "构筑/events.jsonl").read_bytes()
         fresh = AgentRunner(self.service)
         self.addCleanup(fresh.close)
@@ -94,7 +95,7 @@ class AgentRunnerTests(StudioCase):
             "assistant_text": "采用钟楼。", "decision": "钟楼", "edits": {"核心概念.md": "# 核心概念\n\n钟楼。"}})
         req = self.ticket("改为从河岸开始。", "revise")
         job = self.finish(self.launch(req))
-        self.assertEqual("completed", job["status"])
+        self.assertEqual("completed", job["status"], job)
         detail = self.service.bible_view(self.p, req["topic_id"])
         self.assertEqual(self.topic["id"], detail["topic"]["revises"])
         self.assertEqual("钟楼", self.service.bible_view(self.p, self.topic["id"])["topic"]["decision"])
@@ -104,7 +105,7 @@ class AgentRunnerTests(StudioCase):
         for kind in ("continue", "regenerate"):
             req = self.service.request(self.p, "main", self.service.version(self.project, session), "我核对钟面。", kind=kind)
             job = self.finish(self.launch(req))
-            self.assertEqual("completed", job["status"])
+            self.assertEqual("completed", job["status"], job)
         events = read_events(session)
         self.assertEqual(1, sum(e["type"] == "turn_committed" for e in events))
         self.assertEqual(1, sum(e["type"] == "variant_added" for e in events))
@@ -129,7 +130,7 @@ class AgentRunnerTests(StudioCase):
         op = self.service.bible_view(self.p, request_id=req["id"])["operation_id"]
         recovery = self.service.bible_edit(self.p, "recovery", operation_id=op)
         job = self.finish(self.launch(recovery))
-        self.assertEqual("completed", job["status"])
+        self.assertEqual("completed", job["status"], job)
         self.assertEqual(op, self.service.bible_view(self.p, request_id=req["id"])["operation_id"])
 
     def test_cli_error_and_missing_executable_keep_ticket(self):
@@ -174,6 +175,30 @@ class AgentRunnerTests(StudioCase):
         self.assertIsNone(stdin)
         self.assertNotIn("--continue", args)
         self.assertNotIn("--auto", args)
+
+    def test_desktop_is_reported_but_never_executed_as_cli(self):
+        local, roaming = self.root / "Local", self.root / "Roaming"
+        desktop = local / "Programs/@opencode-aidesktop/OpenCode.exe"
+        desktop.parent.mkdir(parents=True)
+        desktop.touch()
+        with patch.dict("os.environ", {"LOCALAPPDATA": str(local), "APPDATA": str(roaming), "STORY_STUDIO_OPENCODE": ""}), patch("agent_runner.shutil.which", return_value=None):
+            with self.assertRaisesRegex(StudioError, "已检测到 OpenCode 桌面版"):
+                executable("opencode")
+            row = self.runner.providers()["providers"][1]
+            self.assertFalse(row["available"])
+            self.assertTrue(row["desktop_available"])
+            cli = desktop.parent / "resources/opencode-cli.exe"
+            cli.parent.mkdir()
+            cli.touch()
+            self.assertEqual(str(cli.resolve()), executable("opencode"))
+
+    def test_cached_desktop_cli_is_detected_without_path(self):
+        local, roaming = self.root / "Local", self.root / "Roaming"
+        cli = roaming / "OpenCode/cli/1.2.3/opencode-cli.exe"
+        cli.parent.mkdir(parents=True)
+        cli.touch()
+        with patch.dict("os.environ", {"LOCALAPPDATA": str(local), "APPDATA": str(roaming), "STORY_STUDIO_OPENCODE": ""}), patch("agent_runner.shutil.which", return_value=None):
+            self.assertEqual(str(cli.resolve()), executable("opencode"))
 
     def test_http_dispatch_requires_origin_token_and_no_generation_payloads(self):
         server = DinerServer(("127.0.0.1", 0), self.root)

@@ -19,11 +19,32 @@ from studio_construction_history import read_event
 ACTIVE = {"starting", "running", "stopping"}
 
 
+def opencode_installation():
+    """Inspect only known installation paths; the desktop executable is not a CLI."""
+    desktops, binaries = [], []
+    local, roaming = os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA")
+    if local:
+        for name in ("@opencode-aidesktop", "OpenCode"):
+            folder = Path(local) / "Programs" / name
+            desktops.append(folder / "OpenCode.exe")
+            binaries.append(folder / "resources/opencode-cli.exe")
+    if roaming:
+        cache = Path(roaming) / "OpenCode/cli"
+        if cache.is_dir():
+            binaries.extend(sorted(cache.glob("*/opencode-cli.exe"), key=lambda p: p.stat().st_mtime, reverse=True))
+    return next((p for p in desktops if p.is_file()), None), next((p for p in binaries if p.is_file()), None)
+
+
 def executable(provider):
     if provider not in {"codex", "opencode"}:
         raise StudioError("请选择 Codex 或 OpenCode")
     value = os.environ.get("STORY_STUDIO_" + provider.upper()) or shutil.which(provider)
+    desktop = None
+    if not value and provider == "opencode":
+        desktop, value = opencode_installation()
     if not value:
+        if desktop:
+            raise StudioError("已检测到 OpenCode 桌面版，但未找到独立 CLI。直接生成需要 opencode run；请安装 CLI 或用 STORY_STUDIO_OPENCODE 指定它的路径，也可复制小票到桌面版。")
         raise StudioError(f"未找到 {provider} CLI；安装并登录后重启工作台，或使用复制小票。")
     path = Path(value).resolve()
     # Never send prompts through cmd.exe / shell wrappers.
@@ -58,7 +79,8 @@ class AgentRunner:
                 executable(name)
                 rows.append({"id": name, "available": True})
             except StudioError as exc:
-                rows.append({"id": name, "available": False, "reason": str(exc)})
+                desktop = name == "opencode" and opencode_installation()[0] is not None
+                rows.append({"id": name, "available": False, "desktop_available": desktop, "reason": str(exc)})
         return {"providers": rows}
 
     def ticket_info(self, ticket_path):
@@ -107,6 +129,12 @@ class AgentRunner:
         return path
 
     def status(self, job_id):
+        # Windows cannot replace a JSON file while another thread has it open.
+        # Coordinate polling with local writes as well as serializing generators.
+        with self.mutex:
+            return self._status(job_id)
+
+    def _status(self, job_id):
         path = self.job_path(job_id)
         if not path.is_file():
             raise StudioError("生成任务不存在")
@@ -148,8 +176,9 @@ class AgentRunner:
         return self.status(job_id)
 
     def _save(self, job, **updates):
-        job.update(updates, updated_at=utc_now())
-        atomic_write_json(self.job_path(job["id"]), job)
+        with self.mutex:
+            job.update(updates, updated_at=utc_now())
+            atomic_write_json(self.job_path(job["id"]), job)
 
     def _completed(self, job, info, current, **updates):
         # Construction is a conversation: show the actual committed answer, which may

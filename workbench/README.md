@@ -41,6 +41,8 @@ python -B workbench/server.py --open
 
 工作台沿用本机平台的默认模型和账号，不接收 API 密钥。Windows 需要本机 `.exe` / `.com`，不执行 `.cmd` / `.ps1` 包装脚本；命令不在 PATH 时，可在启动工作台的终端设置 `STORY_STUDIO_CODEX` 或 `STORY_STUDIO_OPENCODE` 为该可执行文件的绝对路径。不要把这些本机路径写进公开仓库。安装后需重启工作台以取得新的 PATH。
 
+OpenCode 桌面版与 CLI 分开检测。Windows 还会检查桌面安装目录中的 `resources/opencode-cli.exe` 和桌面版的版本化 CLI 缓存。部分桌面版本使用内嵌后台，未提供独立 CLI，此时显示「仅检测到桌面版」，仍可复制小票到桌面版；不能把 `OpenCode.exe` 图形程序当成 `opencode run` 使用。
+
 当前是 CLI 接入：Codex 使用 `codex exec --json`，OpenCode 使用 `opencode run --format json`。生成过程由平台 Agent 执行工具和提交，并非直接调用裸模型 API；也不保证自动显示到已经打开的桌面聊天窗口。每次创建干净的平台上下文，按指定小票恢复文件化上下文，不自动复用上一次或其他故事的聊天历史。
 
 Codex 使用 `workspace-write` 沙箱并将需额外审批的操作拒绝；OpenCode 沿用本机权限配置，不开启自动批准。若登录、权限或上下文预算阻塞，保留原小票并显示未完成。可调整环境后点击「重试原任务」，也可查看小票转交交互式 Agent。重试可切换已安装的平台，仍使用原请求；构筑与 RP 都不能绕过原事务改用新的操作 ID。
