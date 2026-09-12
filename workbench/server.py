@@ -15,6 +15,7 @@ from urllib.parse import urlsplit, parse_qs
 from bootstrap import ROOT
 from studio_workbench import StudioService, Conflict
 from studio_core import StudioError, LockError
+from agent_runner import AgentRunner
 
 STATIC = Path(__file__).resolve().parent / "static"
 READS = {"projects", "project", "openings", "snapshot", "status", "request_status", "requirements_view", "operation_view", "session_diagnostic", "bible_view"}
@@ -37,8 +38,13 @@ class DinerServer(ThreadingHTTPServer):
     def __init__(self, address, workspace):
         super().__init__(address, Handler)
         self.service = StudioService(workspace)
+        self.agents = AgentRunner(self.service)
         self.token = secrets.token_urlsafe(32)
         self.origin = f"http://127.0.0.1:{self.server_port}"
+
+    def server_close(self):
+        self.agents.close()
+        super().server_close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -79,11 +85,17 @@ class Handler(BaseHTTPRequestHandler):
                                        "connections": connections(self.server.service.workspace)})
             if parsed.path.startswith("/api/"):
                 op = parsed.path[5:]
+                if op == "agent_providers":
+                    return self.reply(200, self.server.agents.providers())
+                if op == "agent_status":
+                    params = parse_qs(parsed.query)
+                    return self.reply(200, self.server.agents.status(params.get("job_id", [""])[-1]))
                 if op not in READS:
                     return self.reply(404, {"error": "接口不存在"})
                 params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
                 return self.reply(200, self.server.service.dispatch(op, params))
             assets = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/diner.svg": "diner.svg",
+                      "/agent-panel.js": "agent-panel.js",
                       "/bible": "bible.html", "/bible.js": "bible.js", "/bible.css": "bible.css"}
             if parsed.path not in assets:
                 return self.reply(404, {"error": "页面不存在"})
@@ -108,9 +120,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"status": "stopped"})
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
-            if op not in WRITES:
+            if op not in WRITES | {"agent_start", "agent_stop"}:
                 return self.reply(404, {"error": "接口不存在"})
             payload = json.loads(self.rfile.read(length))
+            if op == "agent_start":
+                return self.reply(200, self.server.agents.start(**payload))
+            if op == "agent_stop":
+                return self.reply(200, self.server.agents.stop(**payload))
             self.reply(200, self.server.service.dispatch(op, payload))
         except Exception as exc:
             self.error(exc)

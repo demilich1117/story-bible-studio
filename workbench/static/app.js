@@ -1,3 +1,4 @@
+import {AgentPanel} from './agent-panel.js';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const state = {token: '', projects: [], project: null, session: null, data: null, patch: {}, override: null, preview: null, scope: 'session', connections: {}, serial: 0, ticket: null, workspaceId: '', refreshSerial: 0};
@@ -207,6 +208,7 @@ function renderConfig(){
 }
 function updateOverride(){const note=$('#override-note');note.hidden=!state.override;note.textContent='本轮菜单已附上 · 成功保存交接小票后，下一张恢复持续设置。';}
 function renderTicket(){
+  agentPanel.changed();
   const labels={waiting:'等待 Agent 接手',ready:'上下文已就绪，等待提交',needs_compaction:'需要先整理记忆',budget_blocked:'上下文超出预算',stale:'上下文已变化，请在 Agent 恢复',committed:'已提交',archived:'已归档',expired:'已过期，请重新生成小票'};
   $('#request-note').hidden=!state.ticket;$('#last-ticket').hidden=!state.ticket;
   $('#request-note').textContent=state.ticket?'上张小票 · '+(labels[state.ticket.status]||'已保存')+(state.ticket.turn?` · 第 ${state.ticket.turn} 轮`:''):'';
@@ -228,14 +230,16 @@ async function saveConfig(extra){await api('configure',configureParams(extra),tr
 async function copyText(text){await navigator.clipboard.writeText(text);toast('已复制。');}
 let shownTicket=null,showFullTicket=false;
 function showTicket(ticket){shownTicket=ticket;showFullTicket=false;$('#ticket-text').value=ticket.instruction;$('#ticket-format').textContent='完整指令';$('#ticket-format').disabled=!ticket.full_instruction;$('#ticket-dialog').showModal();}
-async function handoff(kind){requireSession();if(hasUnsaved())throw new Error('先保存正在编辑的菜单和创作要求，再复制指令。');
+async function handoff(kind){requireSession();agentPanel.check();if(hasUnsaved())throw new Error('先保存正在编辑的菜单和创作要求，再复制指令。');
   const serial=state.serial,oldKey=key(),user_text=$('#user-input').value;
   const recovered=state.recoveryOptions||{};
   if(recovered.kind&&recovered.kind!==kind)throw new Error(recovered.kind==='regenerate'?'找回的是重生成要求，请使用重生成按钮；要另写输入，可先退出原任务恢复。':'找回的是续写输入，请使用续玩按钮；要另写输入，可先退出原任务恢复。');
   const result=await api('request',{project:state.project.id,session:state.session,expected_version:state.data.version,user_text,kind,override:state.override,style_override:recovered.style_override,mode:recovered.mode,query:recovered.query||''},true);
   const ticket={...result,user_text,status:'waiting'};storage.set('ticket:'+oldKey,ticket);storage.set('override:'+oldKey,null);
   if(serial!==state.serial)return;
-  state.ticket=ticket;state.ticketVersion=null;showTicket(result);state.override=null;state.preview=null;state.recoveryOptions=null;updateOverride();saveDraft();renderConfig();renderTicket();
+  state.ticket=ticket;state.ticketVersion=null;state.override=null;state.preview=null;state.recoveryOptions=null;updateOverride();saveDraft();renderConfig();renderTicket();
+  if(await agentPanel.send(result))return;
+  showTicket(result);
   try{await navigator.clipboard.writeText(result.instruction);toast('小票已复制，粘贴到你选择的 Agent 即可。');}catch{toast('小票已保存，请点击复制，或选中指令手动复制。');}
 }
 
@@ -449,4 +453,5 @@ $('#restore-composer-backup').onclick=task(async()=>{
   await restoreRecovery({...(backup.recoveryOptions||{kind:'continue'}),user_text:backup.text,override:backup.override});
 });
 window.addEventListener('beforeunload',event=>{if(hasUnsaved()){event.preventDefault();event.returnValue='';}});
-task(boot)();
+const agentPanel=new AgentPanel(api,()=>[state.workspaceId,'session',state.project?.id,state.session],()=>refreshSession());
+task(async()=>{await boot();await agentPanel.init();})();

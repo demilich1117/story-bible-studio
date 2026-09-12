@@ -2,6 +2,8 @@
 
 MCP 是可选工具入口，CLI 保留。主 Agent 负责正文、人物意图、状态补丁、记忆审核及版本选择；面板只执行用户明确发出的管理操作。
 
+用户在面板选择 Codex/OpenCode 直接生成时，本地调度器会以新的平台上下文发送同一张小票。收到后仍按本指南与构筑接口执行；对外回答必须经核心提交。调度器不代替 Agent prepare/commit，也不批准冻结、归档、选中变体或修改平台配置。仅处理小票指定工作区与主题/会话，不用其他平台线程补上下文。平台权限阻塞时保留原操作并说明，不绕过沙箱。
+
 收到新短小票时直接用 `studio_ticket(ticket_path)` 或小票自带的 `ticket --file` 命令接手，不另读参数文件。返回 kind=bible/bible-recovery 时使用 [构筑接口](../.agents/skills/story-bible-studio/references/construction-workbench.md)，不进入下面的 RP 流程；返回 session/recovery 时继续按本指南操作。完整指令作为备用，旧小票仍可使用。同一任务已经加载的规范不重复读取。
 
 1. 首次读取项目 `AGENTS.md` 和技能 `SKILL.md`，按任务读取必要参考。MCP 可先读取 `studio://guide`。

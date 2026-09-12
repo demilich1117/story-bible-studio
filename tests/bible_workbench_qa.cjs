@@ -48,9 +48,53 @@ const server=cp.spawn(python,['-B','workbench/server.py','--workspace',workspace
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     await page.locator('#bible-outline button').filter({hasText:'米拉为什么'}).last().click();await page.screenshot({path:path.join(artifacts,'06-mobile-detail.png'),fullPage:true});
     await page.setViewportSize({width:1440,height:1000});await page.goto(origin+'/');await page.locator('#session-list button').filter({hasText:fixture.session}).click();await page.locator('#user-input').fill('我问她钟声为什么迟了。');await page.locator('#continue-button').click();await page.locator('#ticket-dialog').waitFor();assert.match(await page.locator('#ticket-text').inputValue(),/ticket --workspace/);await page.locator('#ticket-format').click();assert.match(await page.locator('#ticket-text').inputValue(),/--operation prepare/);await page.screenshot({path:path.join(artifacts,'07-session-ticket.png'),fullPage:true});
+    // UI dispatch is simulated here; test_agent_runner.py tests real subprocesses and core commits.
+    await page.locator('#ticket-dialog [data-close]').click();
+    await page.route('**/api/agent_providers*',route=>route.fulfill({json:{providers:[{id:'codex',available:true},{id:'opencode',available:true}]}}));
+    let mode='commit',job=null,dispatches=[];
+    await page.route('**/api/agent_start',async route=>{
+      const input=route.request().postDataJSON();dispatches.push(input);
+      job={id:'a'.repeat(32),status:'running',message:'Agent 正在处理这张小票。',reply:''};
+      if(mode!=='wait'){
+        const prepared=ticket(input.ticket_path);
+        if(mode==='prepare'){job.status='incomplete';job.message='尚未提交，可重试。';}
+        else{
+          if(prepared.kind==='bible')core('bible_commit',{project:fixture.project,payload:{operation_id:prepared.operation_id,status:'open',decision:'直接生成已保存，河岸先行。',assistant_text:'先调查河岸。<script>这只是文字</script>',next_prompt:{question:'带上哪件工具？',options:{'1':'怀表','2':'旧地图'}}}});
+          else core('commit',{project:fixture.project,session:fixture.session,operation_id:prepared.operation_id,prose:'直接生成的回复：米拉把钟面转向窗边。',regenerate:prepared.regenerate});
+          job.reply='先调查河岸。<script>这只是文字</script>';
+        }
+      }
+      await route.fulfill({json:job});
+    });
+    await page.route('**/api/agent_status?*',route=>{if(mode==='commit')job={...job,status:'completed',message:'已提交，工作台会自动更新。'};return route.fulfill({json:job});});
+    await page.route('**/api/agent_stop',route=>{job={...job,status:'stopped',message:'生成已停止，小票仍保留。'};return route.fulfill({json:job});});
+    await page.goto(url(fixture.topic));await page.locator('#topic-title').waitFor();
+    await page.locator('#agent-provider').selectOption('codex');await page.locator('#idea-input').fill('从河岸接着讨论。');await page.locator('#continue-idea').click();
+    await page.waitForFunction(()=>document.querySelector('#topic-decision').textContent.includes('直接生成已保存'));
+    assert.equal(await page.locator('#bible-ticket-dialog').isVisible(),false);
+    await page.reload();await page.waitForFunction(()=>document.querySelector('#agent-status').textContent.includes('已提交'));
+    assert.equal(await page.locator('#agent-provider').inputValue(),'codex');
+    assert.match(await page.locator('#agent-reply').innerText(),/<script>/);assert.equal(await page.locator('#agent-reply script').count(),0);
+    await page.screenshot({path:path.join(artifacts,'08-direct-construction.png'),fullPage:true});
+    mode='prepare';await page.locator('#idea-input').fill('继续比较工具。');await page.locator('#continue-idea').click();await page.locator('#agent-retry').waitFor();
+    const savedPath=dispatches.at(-1).ticket_path;mode='commit';await page.locator('#agent-provider').selectOption('opencode');await page.locator('#agent-retry').click();
+    await page.waitForFunction(()=>document.querySelector('#agent-status').textContent.includes('已提交'));
+    assert.equal(dispatches.at(-1).ticket_path,savedPath);assert.equal(dispatches.at(-1).retry,true);assert.equal(dispatches.at(-1).provider,'opencode');
+    mode='wait';await page.locator('#idea-input').fill('测试停止时保留输入。');await page.locator('#continue-idea').click();await page.locator('#agent-stop').waitFor().catch(async error=>{await page.screenshot({path:path.join(artifacts,'dispatch-failure.png'),fullPage:true});console.error(JSON.stringify({toast:await page.locator('#toast').innerText(),status:await page.locator('#agent-status').innerText(),ticket:await lastTicket(),dispatches}));throw error;});await page.locator('#agent-stop').click();
+    await page.waitForFunction(()=>document.querySelector('#agent-status').textContent.includes('已停止'));assert.equal(await page.locator('#idea-input').inputValue(),'测试停止时保留输入。');
+    await page.goto(url(fixture.character));await page.locator('#topic-title').waitFor();assert.equal(await page.locator('#agent-status').innerText(),'');
+    await page.setViewportSize({width:390,height:844});await page.goto(url(fixture.topic));await page.locator('#outline-mode').click();await page.locator('#bible-outline button').filter({hasText:'没有邮戳的信'}).first().click();await page.locator('#agent-provider').waitFor();
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:path.join(artifacts,'09-mobile-direct.png'),fullPage:true});
+    mode='commit';await page.setViewportSize({width:1440,height:1000});await page.goto(origin+'/');await page.locator('#session-list button').filter({hasText:fixture.session}).click();
+    await page.locator('#agent-provider').selectOption('opencode');await page.locator('#user-input').fill('我让她看看窗边的光。');await page.locator('#continue-button').click();
+    await page.waitForFunction(()=>document.querySelector('#agent-status').textContent.includes('已提交'));
+    if(await page.locator('#new-content').isVisible())await page.locator('#new-content').click();
+    await page.waitForFunction(()=>document.querySelector('#story').textContent.includes('直接生成的回复'));
+    assert.equal(await page.locator('#ticket-dialog').isVisible(),false);
+    await page.screenshot({path:path.join(artifacts,'10-direct-session.png'),fullPage:true});
     assert.equal(errors.length,0,errors.join('\n'));
     assert.equal(requests.filter(r=>/\/api\/(?:bible_prepare|bible_commit|prepare|commit)(?:\?|$)/.test(r.url)).length,0);
-    const result={status:'passed',workspace,checks:['desktop map','history original','local draft','short/full ticket','CLI prepare and commit','reload','revision retains source','night theme','mobile outline/detail','session ticket regression','browser never calls generation endpoints'],browserErrors:errors};
+    const result={status:'passed',workspace,checks:['desktop map','history original','local draft','short/full ticket','CLI prepare and commit','reload','revision retains source','night theme','mobile outline/detail','session ticket regression','browser never calls generation endpoints','direct construction (simulated provider)','direct RP (simulated provider)','retry original ticket with another provider','stop preserves input','job isolation and reload','escaped agent reply','mobile direct generation'],browserErrors:errors};
     fs.writeFileSync(path.join(artifacts,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
   }finally{await browser.close();server.kill();}
 })().catch(error=>{server.kill();console.error(error);process.exitCode=1;});
