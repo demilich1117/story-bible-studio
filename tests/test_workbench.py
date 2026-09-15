@@ -294,19 +294,31 @@ class MCPProtocolTests(__import__('unittest').TestCase):
                         return json.loads(response.content[0].text)
                     target = {'project': project.name, 'session': '先别关灯'}
                     view = await call('studio_session', target)
+                    lightweight = await call('studio_status', target)
+                    self.assertEqual(view['version'], lightweight['version'])
+                    self.assertNotIn('turns', lightweight)
+                    self.assertNotIn('scene', lightweight)
                     reqs = await call('studio_requirements', target)
                     await call('studio_requirements', {**target, 'action': 'save', 'expected_version': reqs['version'],
                                                       'items': [{'id':'word1','type':'banned','text':'不容置疑'}]})
-                    payload = {**target, 'user_text': '我走进餐馆。', 'expected_version': view['version']}
+                    payload = {**target, 'user_text': '我走进餐馆。', 'expected_version': view['version'], 'context_delivery': 'inline'}
                     prepared = await call('studio_prepare', payload)
                     self.assertEqual(prepared, await call('studio_prepare', payload))
-                    recovered = await call('studio_operation', target)
+                    recovered = await call('studio_operation', {**target, 'context_delivery': 'inline'})
                     self.assertEqual(prepared['context'], recovered['context'])
                     checked = await call('studio_requirements', {**target, 'action':'check', 'operation_id':prepared['operation_id'], 'prose':'不容置疑。'})
                     self.assertEqual('不容置疑', checked['hits'][0]['text'])
                     commit = {**target, 'operation_id': prepared['operation_id'], 'prose': '六月递来菜单。', 'motifs': ['menu', 'menu']}
                     await call('studio_commit', commit)
                     self.assertTrue((await call('studio_commit', commit))['replayed'])
+                    mem = await call('studio_memory', {**target, 'action':'prepare', 'through_turn':1, 'mode':'quality'})
+                    self.assertNotIn('context', mem)
+                    self.assertTrue(mem['context_parts'])
+                    self.assertTrue(all(part['bytes'] <= 12 * 1024 for part in mem['context_parts']))
+                    applied = {**target, 'action':'apply', 'text':'收到了菜单。', 'through_turn':1,
+                               'operation_id':mem['operation_id'], 'state_updates':{'当前局面.md':'在餐馆等候。'},
+                               'stage_summaries':[{'from_turn':1,'through_turn':1,'text':'六月递来菜单。'}]}
+                    self.assertEqual(await call('studio_memory', applied), await call('studio_memory', applied))
                     self.assertIn('studio_ticket', [t.name for t in tools.tools])
                     session_events = project / '会话/先别关灯/events.jsonl'
                     original_events = session_events.read_bytes()
@@ -317,6 +329,9 @@ class MCPProtocolTests(__import__('unittest').TestCase):
                     prepared = await call('studio_ticket', {'ticket_path': ticket['ticket_path']})
                     self.assertEqual('bible', prepared['kind'])
                     self.assertEqual('ready', prepared['status'])
+                    self.assertNotIn('context', prepared)
+                    self.assertNotIn('report', prepared)
+                    self.assertTrue(all(part['bytes'] <= 12 * 1024 for part in prepared['context_parts']))
                     result = await call('studio_bible_commit', {'project': project.name, 'payload': {
                         'operation_id': prepared['operation_id'], 'status': 'open', 'decision': '菜单关联了一位熟客。',
                         'assistant_text': '一份旧菜单可以是一段日常的纪念。',

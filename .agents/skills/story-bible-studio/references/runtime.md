@@ -75,7 +75,9 @@
 
 `turn commit --operation-id <prepare返回ID>` 默认读取 current 的 user.md、response.md、可选 status.txt、scene-patch.json、state-updates.json。状态更新是五份允许的状态文件到完整 Markdown 的映射。提交必须显式携带原操作 ID；操作 ID 去重，源事件或配置改变时拒绝陈旧提交。恢复与归档流程见 requirements-recovery.md。
 
-`memory prepare [--through-turn N] [--mode economy]` 默认排除近期原文窗口。候选包含旧记忆与当前状态，但不能拿当前状态冒充历史。`memory apply --memory-file <md> --through-turn N [--state-updates <json>]` 校验候选源事件。失效后重新准备；没有较早回合可压缩时，按预算诊断显式决定范围，不循环重试。
+`memory prepare [--through-turn N] [--mode economy]` 默认排除近期原文窗口，返回 operation_id 与来源事件，候选保存策略快照。候选包含旧记忆与当前状态，但不能拿当前状态冒充历史。`memory apply --memory-file <md> --through-turn N [--state-updates <json>] [--operation-id ID] [--stage-summaries <json>]` 校验来源与区间；同 ID 相同内容重试只恢复原事件的视图和收据，不重复压缩。省略 operation-id 时沿用候选 ID。没有较早回合可压缩时按预算报告处理，不循环重试。完整新增接口见 [低消耗交付与记忆接口](low-cost-runtime.md)。
+
+软／硬字符阈值依据必需材料，不计可选召回。报告分列固定材料、活动记忆与状态、原文、可选召回；固定材料与活动状态本身超限时直接 budget_blocked，不靠反复压缩正文解决。80k／40k、16／10、5／3 预设不变，不自动迁移已有会话。
 
 保持 schema v3 的旧事件可读，增加 `bible_bound` 及可选提交字段；索引为 v6，旧索引自动重建。升级后用 `session render` 重建旧视图，不删除或改写旧事件。测试统一运行 `python -B -m unittest discover -s tests -v`。
 

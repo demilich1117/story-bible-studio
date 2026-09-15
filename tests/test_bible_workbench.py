@@ -298,7 +298,7 @@ class BibleWorkbenchTests(StudioCase):
         current = read_state(self.project)["topics"][topic["id"]]
         req = self.service.bible_edit(self.p, "request", topic_id=topic["id"], expected_version=current["version"],
             kind="revise", text="回到旧问题的北岸方向。", history_ids=[first["operation_id"]])
-        ready = self.service.ticket(req["ticket_path"])
+        ready = self.service.ticket(req["ticket_path"], context_delivery='inline')
         self.assertIsNone(ready["context"]["prompt"])
         self.assertEqual("北岸", ready["context"]["history"][0]["prompt"]["options"]["1"])
         with self.assertRaises(StudioError):

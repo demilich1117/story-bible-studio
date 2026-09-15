@@ -156,6 +156,7 @@ def output_rules(config):
     prose = normalize_prose(config.get("prose"))
     if any(value is not None for value in prose.values()):
         rules.append("字数是写作软目标：按目标份量一次起草，自然停笔；不为差几十字凑写、裁句或重新生成。"
+                     "普通轮不调用计数工具、不反复修改或补写找补；由核心提交自动计数。"
                      "提交成功后不因字数提示重写本轮；只有用户明确要求严格字数或改写时才调整。")
     if config.get("interaction_preset") == "short-rp":
         rules.append("短 RP：允许只有对白、观察或等待，不要求局势每轮变化，不为凑字数补动作。"

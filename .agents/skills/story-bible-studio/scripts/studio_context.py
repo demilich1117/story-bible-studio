@@ -73,7 +73,7 @@ def profile_blocks(project, config, active, query, mode, canon_config):
         "profile_id": config["profile_id"], "profile_revision": config["profile_revision"]}
 
 
-def build_context(project, session, user_text, query="", top_k=None, budget_chars=None, mode=None, style_override=None, config_override=None, *, projected_events=None):
+def build_context(project, session, user_text, query="", top_k=None, budget_chars=None, mode=None, style_override=None, config_override=None, *, projected_events=None, regeneration_request=''):
     from studio_retrieval import (INDEX_VERSION, PREFLIGHT_GATE, load_or_build_index,
                                   search_chunks, select_voice_chunks, format_turn,
                                   motif_ledger_text, tokens)
@@ -87,7 +87,8 @@ def build_context(project, session, user_text, query="", top_k=None, budget_char
     budget = int(budget_chars if budget_chars is not None else config["context_budget_chars"])
     if budget <= 0:
         raise StudioError("上下文预算必须为正数")
-    state = reduce_events(read_events(session) if projected_events is None else projected_events)
+    history = read_events(session) if projected_events is None else projected_events
+    state = reduce_events(history)
     config["profile_id"] = state.get("profile_id")
     config["profile_revision"] = state.get("profile_revision")
     revision = state.get("bible_revision")
@@ -108,7 +109,7 @@ def build_context(project, session, user_text, query="", top_k=None, budget_char
     spec_line = f"回合规范：{render_output_spec(output_snapshot)}"
     last_turns = state.get("turns", {})
     if last_turns:
-        last_turn = max(last_turns)
+        last_turn = max(last_turns, key=int)
         selected = state.get("selected_variants", {}).get(last_turn, "v1")
         last_payload = last_turns[last_turn].get("variants", {}).get(selected) or {}
         previous_snapshot = last_payload.get("output_config")
@@ -134,6 +135,8 @@ def build_context(project, session, user_text, query="", top_k=None, budget_char
                 }, ensure_ascii=False)),
                 ("当前场景", render_scene(state))]
     required.insert(2, ("有效文风规则", render_style(writing_style)))
+    if regeneration_request:
+        required.append(('用户对本次重生成的要求（不作为角色行动）', regeneration_request))
     if requirements["items"]:
         required.insert(3, ("本会话创作要求", render_requirements(requirements)))
     if state["memory"].strip() != "# 压缩记忆":
@@ -195,15 +198,13 @@ def build_context(project, session, user_text, query="", top_k=None, budget_char
             detail_query = re.sub(re.escape(alias), " ", detail_query, flags=re.I)
     retrieved = search_chunks(canon, detail_query, top_k=top_k or config["retrieval_top_k"], layers={"bible"}, index=index)
     optional.extend((f"检索：{c['path']} · {c['heading']}", c["content"]) for c in retrieved)
-    # Old memories are recalled only by the explicit input, never by generic continuation.
-    explicit = tokens(user_text + " " + query) - tokens("继续 接着 continue")
-    historical = []
-    for memory in state["memory_history"][:-1]:
-        score = len(explicit & tokens(memory["memory_text"]))
-        if score >= 2:
-            historical.append((score, memory))
-    for _, memory in sorted(historical, key=lambda x: -x[0])[:1 if config["mode"] == "economy" else 2]:
-        optional.append((f"本会话旧事：截至 Turn {memory['through_turn']} / {memory['event_id']}", memory["memory_text"]))
+    from studio_session_recall import explicit_recall, recall
+    historical = {'status': 'not_requested', 'results': [], 'chars': 0}
+    if explicit_recall(user_text, query):
+        historical = recall(session, query or user_text, config['mode'],
+                            events=history if projected_events is not None else None, before_turn=first,
+                            aliases={name: item['aliases'] for name, item in registry.items()})
+        optional[0:0] = [(f"本会话旧事：Turn {m['turn']}-{m['through_turn']} / {m['event_id']}", m['text']) for m in historical['results']]
     body = [f"# 会话上下文：{session.name}\n\n{spec_line}\n\n动态材料仅来自本会话；正史版本 {revision or '未绑定基线'}。最新输入优先；不得读取兄弟会话或 Profile 工作区。"]
     seen, sizes, omitted = set(), {}, []
     skipped_chars = 0
@@ -236,9 +237,9 @@ def build_context(project, session, user_text, query="", top_k=None, budget_char
     reasons = []
     if state["memory_invalidated"]:
         reasons.append("selected_history_changed")
-    if actual >= budget * policy["hard_context_ratio"]:
+    if mandatory_chars >= budget * policy["hard_context_ratio"]:
         reasons.append("hard_context_budget")
-    elif actual >= budget * policy["soft_context_ratio"] and uncompressed >= policy["min_uncompressed_turns"]:
+    elif mandatory_chars >= budget * policy["soft_context_ratio"] and uncompressed >= policy["min_uncompressed_turns"]:
         reasons.append("soft_context_budget")
     if uncompressed >= policy["max_uncompressed_turns"]:
         reasons.append("max_uncompressed_turns")
@@ -246,7 +247,10 @@ def build_context(project, session, user_text, query="", top_k=None, budget_char
     status = "needs_compaction" if reasons and compressible else "ready"
     if state["memory_invalidated"]:
         status = "needs_compaction"
-    if mandatory_chars > budget and not compressible:
+    raw_chars = sizes.get('最近已选原文', 0)
+    active_chars = sum(n for h, n in sizes.items() if h == '压缩记忆' or h.startswith('本会话状态：') or h in {'当前场景', '回环梗台账'})
+    fixed_chars = mandatory_chars - raw_chars - active_chars
+    if mandatory_chars > budget and (not compressible or fixed_chars + active_chars > budget):
         status = "budget_blocked"
     report = {"schema_version": INDEX_VERSION, "status": status, "mode": config["mode"],
               "writing_style": writing_style, "output_config": output_snapshot,
@@ -255,8 +259,14 @@ def build_context(project, session, user_text, query="", top_k=None, budget_char
               "budget_chars": budget, "actual_chars": actual, "mandatory_chars": mandatory_chars,
               "budget_overflow_chars": max(0, actual - budget), "section_chars": sizes,
               "duplicate_chars_skipped": skipped_chars, "excluded_for_budget": omitted,
+              "budget_layers": {'fixed': fixed_chars, 'active_memory_state': active_chars, 'raw': raw_chars, 'optional': actual - mandatory_chars},
+              "budget_blocker": 'fixed_or_active' if fixed_chars + active_chars > budget else 'raw' if mandatory_chars > budget else None,
+              "history_recall": {k: v for k, v in historical.items() if k != 'results'},
+              "history_evidence": [{k: v for k, v in m.items() if k != 'text'} for m in historical['results']],
               "active_characters": sorted(active), "unresolved_characters": unresolved,
               "missing_core_voice": missing_voice, "profile": binding,
+              "motif_ids": sorted({m for m in state.get('motif_ledger', {}) if re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', m)}
+                                  | {m for c in voices for m in re.findall(r'(?im)^\s*(?:[-*]\s*)?(?:ID|梗ID|梗 ID)\s*[:：]\s*([a-z0-9]+(?:-[a-z0-9]+)*)\s*$', c['content'])}),
               "history_changes_to_review": state["history_changes"],
               "recent_turns": [t["turn"] for t in recent],
               "uncompressed_turns": [t["turn"] for t in recent if t["turn"] > state["last_compressed_turn"]],

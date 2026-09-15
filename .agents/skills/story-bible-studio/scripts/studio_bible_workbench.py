@@ -148,6 +148,8 @@ class BibleWorkbench:
                         "module": topic["module"], "status": "open", "decision": text, "draft": text,
                         "revises": topic["id"], "revises_version": topic.get("version", 0), "origin_topic_id": origin,
                         "version": 1, "depends_on": topic.get("depends_on", []), "needs_review": topic.get("needs_review", []),
+                        "accepted_facts": deepcopy(topic.get('accepted_facts', [])),
+                        "rejected_directions": deepcopy(topic.get('rejected_directions', [])),
                         "source": "workbench", "open_questions": [], "intentional_blanks": topic.get("intentional_blanks", [])}
                     prompt_id = None
                 else:
@@ -217,7 +219,17 @@ class BibleWorkbench:
         p, _ = self.locate(project)
         return compact_prepared(operation_bible(p, action, operation_id, reason))
 
-    def ticket(self, ticket_path):
+    def ticket(self, ticket_path, context_delivery='reference'):
+        from studio_delivery import deliver
+        if context_delivery not in {'reference', 'inline'}:
+            raise StudioError('context_delivery 必须为 reference 或 inline')
+        result = self._ticket_inline(ticket_path)
+        path = Path(ticket_path).resolve()
+        parts = path.relative_to(self.projects_root).parts
+        p, s = self.locate(parts[0], parts[2] if len(parts) == 6 and parts[1] == '会话' else None)
+        return deliver(s or p, result, context_delivery)
+
+    def _ticket_inline(self, ticket_path):
         path = Path(ticket_path).resolve()
         if not path.is_relative_to(self.projects_root):
             raise StudioError("小票不属于当前工作区")

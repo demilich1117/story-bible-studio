@@ -13,7 +13,8 @@ from pathlib import Path
 from studio_core import (CONFIG_FILE, EVENT_FILE, StudioError, LockError, add_variant,
                          atomic_write_json, atomic_write_text, create_session,
                          read_events, reduce_events, session_lock, safe_name,
-                         load_yaml, project_events_through_turn, utc_now, normalize_motif_ids)
+                         load_yaml, project_events_through_turn, utc_now, normalize_motif_ids,
+                         validate_state_updates, commit_contract)
 from studio_context import build_context, write_context
 from studio_policy import config_view
 from studio_profiles import list_profiles, list_openings
@@ -320,7 +321,17 @@ class StudioService(BibleWorkbench):
             raise StudioError("运行目录超出会话边界")
 
     def prepare(self, project, session, user_text=None, expected_version=None, request_id=None, regenerate=False, override=None,
-                style_override=None, mode=None, query=""):
+                style_override=None, mode=None, query="", context_delivery='inline'):
+        from studio_delivery import deliver
+        if context_delivery not in {'reference', 'inline'}:
+            raise StudioError('context_delivery 必须为 reference 或 inline')
+        result = self._prepare_inline(project, session, user_text, expected_version, request_id, regenerate, override,
+                                      style_override, mode, query)
+        _, s = self.locate(project, session)
+        return deliver(s, result, context_delivery)
+
+    def _prepare_inline(self, project, session, user_text=None, expected_version=None, request_id=None, regenerate=False, override=None,
+                        style_override=None, mode=None, query=''):
         p, s = self.locate(project, session)
         with session_lock(p), session_lock(s):
             req = None
@@ -376,9 +387,8 @@ class StudioService(BibleWorkbench):
                 # Exclude the entire replaced turn, its memory and scene consequences.
                 events = project_events_through_turn(history, turn - 1)
                 packet, report = build_context(p, s, original, query=user_text or "", config_override=override,
-                                              style_override=style_override, mode=mode, projected_events=events)
-                if user_text:
-                    packet += "\n\n## 用户对本次重生成的要求（不作为角色行动）\n\n" + user_text
+                                              style_override=style_override, mode=mode, projected_events=events,
+                                              regeneration_request=user_text or '')
                 folder.mkdir(parents=True, exist_ok=True)
                 operation = {"operation_id": uuid.uuid4().hex, "turn": turn, "source_event_id": state["last_event_id"],
                              "status": report["status"], "config_hash": hashlib.sha256((s / CONFIG_FILE).read_bytes()).hexdigest(),
@@ -404,7 +414,15 @@ class StudioService(BibleWorkbench):
                 and txn["config_hash"] == hashlib.sha256((s / CONFIG_FILE).read_bytes()).hexdigest()
                 and txn.get("style_dependency") == style_dependency(p, s, txn.get("style_override")))
 
-    def operation(self, project, session, operation_id=None, action="show", expected_version=None, reason=None):
+    def operation(self, project, session, operation_id=None, action="show", expected_version=None, reason=None, context_delivery='inline'):
+        from studio_delivery import deliver
+        if context_delivery not in {'reference', 'inline'}:
+            raise StudioError('context_delivery 必须为 reference 或 inline')
+        result = self._operation_inline(project, session, operation_id, action, expected_version, reason)
+        _, s = self.locate(project, session)
+        return deliver(s, result, context_delivery)
+
+    def _operation_inline(self, project, session, operation_id=None, action='show', expected_version=None, reason=None):
         p, s = self.locate(project, session)
         with session_lock(p), session_lock(s):
             if action not in {"show", "archive", "finish"}:
@@ -490,9 +508,12 @@ class StudioService(BibleWorkbench):
         packet = folder / "context-packet.md" if variant else s / ".runtime/context-packet.md"
         report = json.loads((folder / "report.json" if variant else s / ".runtime/retrieval-report.json").read_text(encoding="utf-8"))
         return {"status": operation["status"], "operation_id": operation["operation_id"], "regenerate": variant,
+                'source_event_id': operation['source_event_id'],
+                'motif_ids': report.get('motif_ids', []),
+                'commit_contract': commit_contract(),
                 "requirements": operation.get("requirements") or {"version": 0, "items": []},
                 "context": packet.read_text(encoding="utf-8") if operation["status"] == "ready" else None,
-                "report": {k: report.get(k) for k in ("compaction", "actual_chars", "budget_chars", "mandatory_chars", "budget_overflow_chars", "section_chars", "excluded_for_budget", "missing_core_voice", "unresolved_characters")},
+                "report": {k: report.get(k) for k in ("compaction", "actual_chars", "budget_chars", "mandatory_chars", "budget_overflow_chars", "section_chars", "excluded_for_budget", "missing_core_voice", "unresolved_characters", 'budget_layers', 'budget_blocker', 'history_recall')},
                 "next": {"ready": "起草并复核后调用 studio_commit；不要另行追加用户回合。",
                          "needs_compaction": "先准备并审核压缩记忆，应用后使用同一请求重新 prepare。",
                          "budget_blocked": "按 section_chars 检查超限来源；可调整模式/配置后用同一请求重新 prepare，不能起草。"}[operation["status"]]}
@@ -527,6 +548,11 @@ class StudioService(BibleWorkbench):
                 raise Conflict("文风已变化，请重新准备")
             if not prose.strip():
                 raise StudioError("正文不能为空")
+            validate_state_updates(state_updates)
+            if scene_patch is not None and not isinstance(scene_patch, dict):
+                raise StudioError('scene_patch 必须为对象；显示状态栏请放在 status 字符串中')
+            if not isinstance(status, str):
+                raise StudioError('status 必须为逐行 字段：值 的字符串，不能是对象；正文单独放在 prose')
             if txn.get("output_config", {}).get("status_bar", {}).get("enabled") is False:
                 status = ""
             atomic_write_text(folder / "response.md", prose)
@@ -556,23 +582,80 @@ class StudioService(BibleWorkbench):
             target.parent.mkdir(parents=True, exist_ok=True)
             folder.rename(target)
 
-    def memory(self, project, session, action="prepare", text=None, through_turn=None, expected_event_id=None):
+    def memory(self, project, session, action="prepare", text=None, through_turn=None, expected_event_id=None,
+               state_updates=None, mode=None, operation_id=None, stage_summaries=None):
         p, s = self.locate(project, session)
         with session_lock(s):
             if action == "prepare":
                 from studio_core import prepare_memory
-                return prepare_memory(s, through_turn)
-            if action != "apply" or not text or through_turn is None or not expected_event_id:
+                return prepare_memory(s, through_turn, mode)
+            if action != "apply" or not text or through_turn is None or not (expected_event_id or operation_id):
                 raise StudioError("应用记忆需要审核后的完整文本、through_turn 和 expected_event_id")
             from studio_core import apply_memory
-            apply_memory(s, text, through_turn, expected_event_id=expected_event_id)
-            return {"status": "applied", "next": "旧上下文已过期；使用原输入重新准备，不能继续旧草稿。"}
+            return apply_memory(s, text, through_turn, state_updates, expected_event_id,
+                                operation_id=operation_id, stage_summaries=stage_summaries)
+
+    def recall(self, project, session, query, operation_id, mode=None):
+        from studio_session_recall import recall, fingerprint
+        p, s = self.locate(project, session)
+        with session_lock(s):
+            rows = preparations(s)
+            row = next((r for r in rows if (r.get('transaction') or {}).get('operation_id') == operation_id), None)
+            if not row or row['transaction']['status'] != 'ready':
+                raise StudioError('召回必须绑定本会话 ready 操作')
+            txn = row['transaction']
+            if not self.transaction_current(p, s, txn):
+                raise StudioError('召回操作已过期')
+            path = s / '.runtime/recall' / (safe_name(operation_id) + '.json')
+            self.contained(path, s)
+            signature = fingerprint([query, mode])
+            if path.exists():
+                saved = json.loads(path.read_text(encoding='utf-8'))
+                if saved['request_hash'] != signature:
+                    raise StudioError('本轮已补查一次；不得自动循环召回')
+                return saved['result']
+            history = read_events(s)
+            if txn.get('turn'):
+                history = project_events_through_turn(history, txn['turn'] - 1)
+            effective_mode = mode or txn.get('mode') or txn.get('request_payload', {}).get('mode') or load_yaml(s / CONFIG_FILE).get('mode', 'quality')
+            from studio_versions import snapshot_root, character_registry, canon_payload
+            state = reduce_events(history)
+            canon = snapshot_root(p, state['bible_revision']) if state.get('bible_revision') else p
+            manifest = canon / 'manifest.json'
+            registry = json.loads(manifest.read_text(encoding='utf-8'))['registry'] if manifest.exists() else character_registry(canon_payload(canon)['files'])
+            result = recall(s, query, effective_mode, events=history,
+                            aliases={name: item['aliases'] for name, item in registry.items()})
+            atomic_write_json(path, {'request_hash': signature, 'result': result})
+            return result
+
+    def dispatch_transport(self, operation, params):
+        """Agent CLI boundary: share MCP file delivery; internal dispatch stays compatible."""
+        if not isinstance(params, dict):
+            raise StudioError('参数必须为 JSON 对象')
+        params = dict(params)
+        if operation in {'prepare', 'operation', 'ticket'}:
+            params.setdefault('context_delivery', 'reference')
+            return self.dispatch(operation, params)
+        if operation in {'memory', 'bible_prepare', 'bible_operation'}:
+            delivery = params.pop('context_delivery', 'reference')
+            if delivery not in {'reference', 'inline'}:
+                raise StudioError('context_delivery 必须为 reference 或 inline')
+            result = self.dispatch(operation, params)
+            if delivery == 'inline' or (operation == 'memory' and params.get('action', 'prepare') != 'prepare'):
+                return result
+            from studio_delivery import deliver
+            p, s = self.locate(params['project'], params.get('session'))
+            if operation == 'memory':
+                result = {'status': 'prepared', **{k: result[k] for k in
+                          ('operation_id', 'from_turn', 'through_turn', 'source_event_id')}, 'context': result}
+            return deliver(s if operation == 'memory' else p, result, delivery)
+        return self.dispatch(operation, params)
 
     def dispatch(self, operation, params):
         allowed = {"projects", "project", "openings", "snapshot", "status", "configure", "new_session", "select",
                    "checkpoint", "branch", "request", "prepare", "commit", "memory", "preview", "operation", "request_status",
                    "requirements", "requirements_view", "operation_view", "operation_edit", "recovery_ticket", "session_diagnostic",
-                   "bible_view", "bible_edit", "bible_prepare", "bible_commit", "bible_operation", "ticket"}
+                   "bible_view", "bible_edit", "bible_prepare", "bible_commit", "bible_operation", "ticket", "recall"}
         if operation not in allowed or not isinstance(params, dict):
             raise StudioError("未知操作或参数格式错误")
         return getattr(self, operation)(**params)

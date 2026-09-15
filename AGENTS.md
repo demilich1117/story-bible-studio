@@ -4,6 +4,8 @@
 
 工作台及可选 MCP 共用统一 CLI/核心，具体交接见 `workbench/agent-guide.md`。用户通过面板明确发出的设置、会话、检查点和版本选择操作可由统一核心直接执行；正文、状态补丁和记忆应用仍由主 Agent 决定并提交。不得绕过事件引擎直接改写逐轮记录。面板切换会话不代表平台聊天上下文已切换；只读取指定会话。
 
+桌面端自然语言 RP 与小票使用同一交付流程。有小票直接 ticket；无小票且目标明确时，有 MCP 用 studio_status → studio_prepare，无 MCP 用结构化 CLI workbench --operation status → prepare；已有有效版本可直接准备。目标不明确只确认作品／会话，不扫描目录或猜面板选择。准备、恢复、记忆候选默认返回短收据，按 context_parts 读取全部分段一次；正文与状态按 commit_contract 分开，以原 operation_id 提交成功后再展示。普通轮不走传统 turn prepare 的整包读取，不查源码、旧事务或兄弟会话，不重复计数或 prepare；格式错误只修指出的参数，压缩／过期等明确状态才走恢复接口。细节见技能 references/roleplay-v3.md。
+
 Story Bible 构筑桌可依用户操作保存灵感、草稿和修订请求，正史修改仍由主 Agent 审核提交。构筑历史独立追加到 `构筑/events.jsonl`，不混入 RP 会话。普通构筑每轮一次准备、一次提交，同时保存对外问答、决策和下一题；导图由本地程序生成，不新增模型整理或全局召回。主题接口见技能的 `references/construction-workbench.md`。
 
 本工作区的同等核心任务是文学创作、连续角色扮演与 Story Bible 构筑。Story Bible 服务于创作，不是最终交付物。

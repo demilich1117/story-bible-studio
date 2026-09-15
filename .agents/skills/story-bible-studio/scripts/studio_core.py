@@ -961,7 +961,26 @@ def branch_session(project: Path, source_id: str, checkpoint_id: str, new_sessio
 
 
 def prepare_memory(session: Path, through_turn: int | None = None, mode: str | None = None) -> dict[str, Any]:
-    state = reduce_events(read_events(session))
+    with session_lock(session):
+        return _prepare_memory(session, through_turn, mode)
+
+
+def _prepare_memory(session: Path, through_turn: int | None = None, mode: str | None = None) -> dict[str, Any]:
+    history = read_events(session)
+    source_event_id = history[-1]['event_id'] if history else None
+    projection_through_turn = None
+    for name in ('current', 'variant-current'):
+        transaction = session / '.runtime' / name / 'transaction.json'
+        if transaction.exists():
+            txn = json.loads(transaction.read_text(encoding='utf-8'))
+            if txn.get('status') == 'needs_compaction' and txn.get('source_event_id') == source_event_id:
+                if mode is None:
+                    mode = txn.get('mode') or txn.get('request_payload', {}).get('mode')
+                if name == 'variant-current':
+                    projection_through_turn = txn['turn'] - 1
+                    history = project_events_through_turn(history, projection_through_turn)
+                break
+    state = reduce_events(history)
     start = int(state["last_compressed_turn"]) + 1
     from studio_policy import resolve_policy
     config = resolve_policy(load_yaml(session / CONFIG_FILE), mode)
@@ -977,12 +996,17 @@ def prepare_memory(session: Path, through_turn: int | None = None, mode: str | N
         "from_turn": start,
         "through_turn": end,
         "turns": turns,
-        "source_event_id": state["last_event_id"],
+        "source_event_id": source_event_id,
+        "projection_through_turn": projection_through_turn,
+        "policy_snapshot": {k: config[k] for k in ('mode', 'memory_policy', 'recent_turns', 'context_budget_chars')},
         "selected_variants": {str(t["turn"]): t["variant_id"] for t in turns},
         "previous_memory": state["memory"],
         "current_state": state["continuity_state"],
         "scene": state["scene"],
         "output_contract": "返回完整记忆；区分保留、更新与已解决事实，保留未决承诺及来源；不得把当前状态回填为较早回合事实",
+        "stage_summary_contract": "可同次提交 stage_summaries: [{from_turn, through_turn, text}]；已解决旧事可移入阶段摘要，活动记忆保留当前因果、关系承诺、知情范围和未决事项。旧摘要不自动改写。",
+        "memory_target_chars": [2000, 4000] if config['mode'] == 'economy' else [4000, 6000],
+        "target_policy": "仅作编辑目标；不得截断必要事实或为达标追加计数和改写调用。",
         "required_memory_sections": ["已发生因果", "关系变化与承诺", "知情范围与秘密", "未决目标", "连续性"],
         "compression_rules": [
             "只保存已经发生的事实、选择、承诺、后果和仍会影响后续的连续性",
@@ -993,6 +1017,7 @@ def prepare_memory(session: Path, through_turn: int | None = None, mode: str | N
         "forbidden_decisions": ["修改冻结正史", "选择回复变体", "决定用户角色意图", "直接写入文件"],
     }
     runtime = session / ".runtime"
+    candidate['operation_id'] = hashlib.sha256(json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     runtime.mkdir(exist_ok=True)
     cached = runtime / "memory-candidate.json"
     if cached.exists():
@@ -1008,27 +1033,27 @@ def validate_state_updates(state_updates):
         raise StudioError("状态补丁必须是对象")
     for filename in (state_updates or {}):
         if filename not in STATE_FILES:
-            raise StudioError(f"非法会话状态文件: {filename}")
+            raise StudioError(f"state_updates 非法键 {str(filename)[:80]!r}；只允许文件名：{'、'.join(STATE_FILES)}。"
+                              "值须为该文件完整 Markdown。时间、地点、在场角色等属于 scene_patch "
+                              "(time/location/characters/tension/positions/continuity/open_event)，"
+                              "显示状态栏属于 status，不能放进 prose。保留正文和 operation_id，仅修正参数后重试；无需查目录或源码。")
         if not isinstance(state_updates[filename], str):
             raise StudioError("状态补丁必须是完整 Markdown 字符串")
 
 
-def apply_memory(session: Path, memory_text: str, through_turn: int, state_updates: dict[str, str] | None = None, expected_event_id: str | None = None) -> None:
-    validate_state_updates(state_updates)
-    if not memory_text.strip():
-        raise StudioError("压缩记忆不能为空")
-    with session_lock(session):
-        state = reduce_events(read_events(session))
-        if expected_event_id and state["last_event_id"] != expected_event_id:
-            raise StudioError("压缩候选已过期，请重新准备")
-        if through_turn <= int(state["last_compressed_turn"]) or through_turn > int(state["current_turn"]):
-            raise StudioError("压缩终点超出有效回合范围")
-        _append_event_unlocked(session, "memory_compacted", {
-            "through_turn": through_turn,
-            "memory_text": memory_text.rstrip(),
-            "state_updates": state_updates or {},
-        })
-        rebuild_views(session)
+def commit_contract():
+    return {
+        'prose': '仅故事正文，不含状态栏、场景表、工具说明。',
+        'status': '独立的显示状态栏字符串，按本轮配置逐行 字段：值；关闭时省略。不要重复放入 prose。',
+        'scene_patch': '场景对象，使用当前场景的英文字段：time/location/characters/tension/positions/continuity/open_event；characters 为姓名数组。',
+        'state_updates': {'keys': STATE_FILES, 'values': '仅更新发生变化的文件；值为完整 Markdown，不是字段增量。不填时间、地点等键，也不加目录前缀。'},
+        'finish': '必须以本 operation_id 调用 studio_commit，成功后展示已提交正文及状态栏；仅生成文字不算完成。格式错误仅按错误修参数重试，不查目录、源码或重写正文。',
+    }
+
+
+def apply_memory(session: Path, memory_text: str, through_turn: int, state_updates: dict[str, str] | None = None, expected_event_id: str | None = None, *, operation_id=None, stage_summaries=None):
+    from studio_memory import apply
+    return apply(session, memory_text, through_turn, state_updates, expected_event_id, operation_id, stage_summaries)
 
 
 def transition_scene(session: Path, scene_id: str, scene: dict[str, Any]) -> None:

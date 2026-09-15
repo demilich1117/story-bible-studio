@@ -42,6 +42,10 @@ prepare 返回当前主题、核心概念、目标模块、当前题目和显式
 
 ## 历史与修订
 
+`decision` 只表示本轮取舍。新增 `accepted_facts` 操作列表维护累计事实：`[{"id":"silver-ring","action":"add","text":"祖母留下的银戒"}]`。action 为 add／replace／revoke，replace 需要完整新事实，revoke 只需 id。未提及事实保留，程序记录来源讨论与 active／revoked 状态。开放主题可确认事实，proposal／parked 不得确认；已采用或冻结主题先提出修订。修订继承原累计事实。`rejected_directions` 可保存明确否决的文字方向，省略则保留。不要自动从历史原文或旧 decision 推断事实。
+
+旧主题仍使用原 decision 和模块；下一次正常构筑才显式补全累计事实，不额外全局整理。prepare 包含累计事实和未决事项，不自动加载全部历史；仍一次准备、一次提交。默认 MCP／小票返回文件分段清单，读取完整后才讨论。
+
 `studio_bible_view(project, topic_id)` 返回当前内容与分页历史；指定 event_id 才返回该条原文。原文默认不进入 prepare，明确需要时传最多三条 history_ids。只能读取当前主题，或当前修订明确关联的来源主题。
 
 `studio_bible_edit` 的 draft/park/request 需要 topic_id 和节点 expected_version。浏览器自动保留输入草稿，点击保存才追加一个版本。
@@ -59,7 +63,7 @@ prepare 返回当前主题、核心概念、目标模块、当前题目和显式
 - 新准备不能覆盖旧任务。`studio_bible_operation(project, operation_id)` 返回原上下文；pending 返回原提交 payload，用 action="resume" 恢复。相同提交可原样重试，不重复记录。
 - 用户明确重新准备时，action="archive" 携带操作 ID 与原因，完整准备材料保留在本作品运行目录。已有一半提交先恢复，不能归档掉一半正文。
 - 无关草稿不影响准备中的任务；被使用的主题或设定变化会使准备过期。保留材料并重新准备，不更换操作 ID 绕过检查。
-- 默认构筑预算 20,000 字符，来自项目 construction.context_budget_chars，可用本次 budget 覆盖；related 最多两份。可选材料超限列为 omitted，必要材料不截断。
+- 默认构筑预算 20,000 字符，来自项目 construction.context_budget_chars，可用本次 budget 覆盖；related 是明确依赖集合，不再限制两份。超限或缺失材料列为 omitted，未加载模块不能提交编辑，必要材料不截断。
 - budget_blocked 不创建准备事务。按具体报告调整预算或整理目标主题，不自动压缩、不启动子代理、不做全局检索。字符统计不等于账户额度。
 - 4–6 轮的小校准与 10–12 轮的编辑整理并入正常回复；额外全文审计仅在真实冲突或冻结时进行。
 

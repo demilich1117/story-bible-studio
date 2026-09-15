@@ -132,9 +132,12 @@ def prepare_bible(project, module=None, options=None, mode=None, related=None, *
                   "prompt": prompt, "materials": materials, "history": history}
         count = lambda: len(json.dumps(packet, ensure_ascii=False))
         omitted, used = [], list(names)
-        for name in related[:2]:
+        for name in related:
             path = module_path(project, name)
-            if name in materials or not path.exists():
+            if name in materials:
+                continue
+            if not path.exists():
+                omitted.append(name)
                 continue
             materials[name] = path.read_text(encoding="utf-8")
             if count() > limit:
@@ -142,7 +145,6 @@ def prepare_bible(project, module=None, options=None, mode=None, related=None, *
                 omitted.append(name)
             else:
                 used.append(name)
-        omitted.extend(related[2:])
         if count() > limit:
             return {"status": "budget_blocked", "required_chars": count(), "budget_chars": limit,
                     "required_files": names, "omitted": omitted,
@@ -206,6 +208,15 @@ def _pending_commit(project, request, payload, state):
     topic.update(decision=decision, status=status, version=topic.get("version", 0) + 1,
                  open_questions=string_list(payload.get("open_questions", topic.get("open_questions", [])), "待决问题"),
                  intentional_blanks=string_list(payload.get("intentional_blanks", topic.get("intentional_blanks", [])), "有意留白"))
+    if 'accepted_facts' in payload:
+        if status not in {'open', 'complete'} or prior_status in {'complete', 'superseded'}:
+            raise StudioError('累计事实只可在开放主题确认；已采用主题请先提出修订')
+        if load_yaml(project / '项目配置.yaml').get('bible_status') == 'frozen' and not topic.get('revises'):
+            raise StudioError('冻结设定的累计事实需要先提出修订')
+        from studio_construction_facts import update_facts
+        topic['accepted_facts'] = update_facts(topic.get('accepted_facts', []), payload['accepted_facts'], request['operation_id'])
+    if 'rejected_directions' in payload:
+        topic['rejected_directions'] = string_list(payload['rejected_directions'], '明确否决方向')
     if prior_status in {"complete", "superseded"} and not edits:
         topic.update(status=prior_status, decision=prior_decision)
     if "depends_on" in payload:

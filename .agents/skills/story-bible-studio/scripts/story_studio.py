@@ -75,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ticket = groups.add_parser("ticket", help="直接接手工作台小票，无需另读参数文件")
     ticket.add_argument("--file", required=True)
+    ticket.add_argument('--context-delivery', choices=('reference', 'inline'), default='reference')
     ticket.add_argument("--workspace", default=str(Path(__file__).resolve().parents[4]))
 
     style = groups.add_parser("style", help="独立文风配置与有效规则")
@@ -256,6 +257,8 @@ def build_parser() -> argparse.ArgumentParser:
     memory_apply.add_argument("--memory-file", required=True)
     memory_apply.add_argument("--through-turn", required=True, type=int)
     memory_apply.add_argument("--state-updates")
+    memory_apply.add_argument('--operation-id')
+    memory_apply.add_argument('--stage-summaries', help='阶段摘要 JSON 文件')
 
     scene = groups.add_parser("scene", help="场景切换")
     scene_sub = scene.add_subparsers(dest="action", required=True)
@@ -298,13 +301,13 @@ def add_locator(parser: argparse.ArgumentParser, include_session: bool = True) -
 def run(args: argparse.Namespace) -> object:
     if args.group == "ticket":
         from studio_workbench import StudioService
-        return StudioService(Path(args.workspace)).ticket(args.file)
+        return StudioService(Path(args.workspace)).ticket(args.file, args.context_delivery)
     if args.group == "bible" and args.action == "operation":
         from studio_construction import operation_bible
         return operation_bible(Path(args.project).resolve(), args.action, args.operation_id, args.reason)
     if args.group == "workbench":
         from studio_workbench import StudioService
-        return StudioService(Path(args.workspace)).dispatch(args.operation, json_file(args.payload_file))
+        return StudioService(Path(args.workspace)).dispatch_transport(args.operation, json_file(args.payload_file))
     if args.group == "variant" and args.action == "prepare":
         from studio_workbench import StudioService
         project, session = locate(args)
@@ -436,16 +439,20 @@ def run(args: argparse.Namespace) -> object:
             return candidate
         return {
             "status": "prepared",
+            "operation_id": candidate['operation_id'],
+            "source_event_id": candidate['source_event_id'],
             "candidate": str(session / ".runtime" / "memory-candidate.json"),
             "from_turn": candidate["from_turn"],
             "through_turn": candidate["through_turn"],
         }
     if args.group == "memory" and args.action == "apply":
-        candidate = json_file(str(session / ".runtime/memory-candidate.json"))
-        if candidate.get("through_turn") != args.through_turn:
+        candidate_path = session / '.runtime/memory-candidate.json'
+        candidate = json_file(str(candidate_path)) if candidate_path.exists() else {}
+        if not args.operation_id and candidate.get("through_turn") != args.through_turn:
             raise StudioError("压缩终点与候选不一致")
-        apply_memory(session, text_file(args.memory_file), args.through_turn, json_file(args.state_updates), candidate["source_event_id"])
-        return {"status": "applied", "through_turn": args.through_turn}
+        source = candidate.get('source_event_id') if not args.operation_id or candidate.get('operation_id') == args.operation_id else None
+        return apply_memory(session, text_file(args.memory_file), args.through_turn, json_file(args.state_updates), source,
+                            operation_id=args.operation_id or candidate.get('operation_id'), stage_summaries=json_file(args.stage_summaries))
     if args.group == "scene" and args.action == "transition":
         transition_scene(session, args.id, json_file(args.state_file))
         return {"status": "transitioned", "scene": args.id}

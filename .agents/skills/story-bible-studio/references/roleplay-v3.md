@@ -2,11 +2,25 @@
 
 ## 每轮事务
 
-1. 将用户原文保存到本会话 `.runtime/current/user.md`，运行 `turn prepare --input-file`。普通“继续”不手工补人物名或 query；系统从本会话场景生成召回条件。
-2. 检查状态。`ready` 才读取 `.runtime/context-packet.md`；`needs_compaction` 按报告准备、审核、应用记忆后重新 prepare；`budget_blocked` 时检查报告并显式调整预算或压缩范围，不静默删除必需材料。
-3. 起草前按 `turn-thinking.md` 轻量检查用户意图、人物一致性和自然停点；纠正、漂移或复杂转场时按需使用完整决策卡和场景写作参考。依包内“有效文风规则”选择当前场景适用的机制分支，不凭近期正文重定文风。本轮临时微调通过 prepare 的 `--style-file` 加载，后续轮恢复持久配置。完整指南在首次需要或发生漂移时读取，不每轮重复加载；包内保留短运行提醒。
-4. 在 current 写入 `response.md`、可选 `status.txt`、`scene-patch.json`、`state-updates.json`。只提交改变的状态文件，值是对应文件的完整 Markdown。`status_bar.enabled: false` 时不写 `status.txt`。
-5. `turn commit --operation-id <prepare返回ID>` 显式绑定原操作和源事件位置。失败保留现场，直接重试；已写事件只恢复视图，不追加重复剧情。成功清空 current 并返回收据。已有待提交正文时 prepare 不会覆盖它。
+桌面自然语言、工作台与小票统一采用 [低消耗交付协议](low-cost-runtime.md)。不要求用户每轮提供小票或操作命令；由 Agent 把自然语言原文交给同一个核心。
+
+1. 有小票直接调用 ticket，一次即可。无小票时沿用当前对话已经明确的作品和会话；目标缺失或冲突只询问目标，不枚举目录、不猜工作台当前选择。新建会话按用户明确请求走 new_session，不把“继续”当新建。
+2. 无小票且没有有效版本时，用 studio_status(project, session) 获取 version；已有有效版本可直接准备。用 studio_prepare(project, session, user_text=用户原文, expected_version=版本) 一次准备。普通“继续”不补人物名或 query；重生成明确传 regenerate=true，不作为新角色行动。若 status 显示待处理事务，先用 studio_operation 检查原任务，不自行覆盖或归档。
+3. 只有 ready 才按 context_parts 清单顺序读取全部分段一次；不读取整个 context-packet.md、不探测目录或旧事务。needs_compaction 按报告的 through_turn 调用 memory prepare，读完候选，主 Agent 审核后 memory apply，再以原输入、覆盖与任务类型恢复准备；这是状态要求的恢复，不是普通轮重复准备。budget_blocked/stale/damaged 按恢复协议处理，不猜测或裁掉必需材料。
+4. 依据包内有效规则做轻量检查并一次起草。只有纠正、漂移或复杂冲突才加载完整诊断。prose 只放正文，status 独立放显示状态栏，scene_patch 放场景字段，state_updates 按合法文件名提供改变文件的完整 Markdown。遵循收据 commit_contract，不为软字数计数、补写或反复修改。
+5. 用 studio_commit 携带原 operation_id、regenerate 和以上内容一次提交，成功后再展示正文与状态栏。格式错误保留正文和操作 ID，只修提示的参数，不查源码或目录；已提交操作只修复视图，不追加剧情。重生成只存候选，不自动选择。
+
+### 无 MCP 的自然语言入口
+
+使用工作区既有 Python 运行环境与 `.agents/skills/story-bible-studio/scripts/story_studio.py`，命令格式：
+
+```text
+python -B .agents/skills/story-bible-studio/scripts/story_studio.py workbench --operation status --payload-file <参数.json>
+```
+
+status 参数为 `{"project":"实际作品","session":"实际会话"}`；prepare 参数为 `{"project":"实际作品","session":"实际会话","user_text":"用户原文","expected_version":"status 返回版本"}`。后续把 operation 改为 commit、memory、operation 或 recall，参数与对应 MCP 工具一致。不要照抄占位值。参数文件放工作区临时目录，使用 JSON 序列化写入，不拼接转义不可靠的 shell 字符串。
+
+结构化 CLI 的 prepare／operation／memory 候选默认与 MCP 一样返回短收据和 context_parts；不需要先启动工作台服务器。内部 Python 调用与显式 context_delivery=inline 保留兼容。传统 turn prepare/commit 仅供明确要求使用的旧客户端，不作为桌面自然语言 RP 的默认入口。
 
 提交输入必须与 prepare 一致。状态栏时间服从 resolved_time_display，并与场景补丁一致。提交后再展示正文。
 
