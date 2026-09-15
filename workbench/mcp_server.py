@@ -10,17 +10,19 @@ from mcp.server.fastmcp import FastMCP
 def create_mcp(root=ROOT):
     service = StudioService(Path(root))
     mcp = FastMCP("Story Bible Diner", instructions=(
-        "Story Bible Studio 本地工具。首次使用读取 studio://guide 和项目 AGENTS.md。"
-        "小票直接用 studio_ticket 接手；kind=bible 时使用构筑主题 prepare/commit，不进入 RP 会话流程。"
-        "先指定作品与会话，prepare 返回 ready 才起草；主 Agent 审核并 commit。"
-        "不得用兄弟会话补剧情。prepare/commit 是成对事务，不手工伪造事件。"
-        "重生成只保存候选。用户面板的请求通过 studio_prepare(request_id=...) 消费。"
-        "字数是软目标，成功收据的字数提示不要求重写本轮。"
-        "MCP 不代替文学技能；正文生成仍由当前 Agent 负责。"))
+        "Story Bible Studio 本地工具。按 studio://guide 接手（已加载本地 agent-guide.md 则不重读）。"
+        "小票调用 studio_ticket 一次即准备或恢复原任务；按 kind/status 分流，主 Agent 审核并经核心提交。"))
 
     @mcp.resource("studio://guide")
     def guide() -> str:
-        return (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8") + "\n\n" + (ROOT / "workbench/agent-guide.md").read_text(encoding="utf-8")
+        path = ROOT / "workbench/agent-guide.md"
+        return f"本地指南：{path}\n\n" + path.read_text(encoding="utf-8")
+
+    @mcp.resource("studio://skill")
+    def skill() -> str:
+        """Load the literary skill once, separately from the compact dispatch guide."""
+        path = SCRIPTS.parent / "SKILL.md"
+        return f"本地技能：{path}\n\n" + path.read_text(encoding="utf-8")
 
     @mcp.tool()
     def studio_projects() -> list[dict]:

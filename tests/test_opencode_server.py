@@ -40,6 +40,10 @@ class Backend(BaseHTTPRequestHandler):
             result = {"healthy": True, "version": server.version}
         elif parsed.path == "/path":
             result = {"directory": server.directory}
+        elif parsed.path == "/provider":
+            result = {"connected": ["vendor"], "all": [
+                {"id": "vendor", "key": "private-key", "models": {"model-a": {"name": "Model A", "secret": "private-key"}}},
+                {"id": "offline", "models": {"hidden": {"name": "Hidden"}}}]}
         elif parsed.path == "/session" and self.command == "POST":
             server.created += 1
             result = {"id": "ses_test" + str(server.created)}
@@ -93,21 +97,37 @@ class SharedServerTests(StudioCase):
         atomic_write_json(self.root / ".workbench/opencode-server.json",
                           {"url": self.url, "username": "opencode", "password": "test-password"})
 
-    def launch(self, ticket, mode="commit", retry=False):
+    def launch(self, ticket, mode="commit", retry=False, model=None):
         self.captured = {}
-        def fake_command(provider, binary, workspace, prompt, conn, sid):
-            args, stdin = command(provider, binary, workspace, prompt, conn, sid)
-            self.captured.update(args=args, sid=sid)
+        def fake_command(provider, binary, workspace, prompt, conn, sid, model=None):
+            args, stdin = command(provider, binary, workspace, prompt, conn, sid, model)
+            self.captured.update(args=args, sid=sid, prompt=prompt)
             return [sys.executable, "-B", str(Path(__file__).with_name("test_agent_runner.py")),
                     "--fake", str(self.root), ticket["ticket_path"], mode, "shared:" + sid], None
         with patch("agent_runner.executable", return_value=sys.executable), patch("agent_runner.command", side_effect=fake_command):
-            job = self.runner.start(ticket["ticket_path"], "opencode_server", retry)
+            job = self.runner.start(ticket["ticket_path"], "opencode_server", retry, model=model)
             # Keep patch in place until the worker has consumed it.
             import time
             end = time.monotonic() + 5
             while self.runner.active and not self.runner.process and time.monotonic() < end:
                 time.sleep(.01)
         return job
+
+    def test_shared_models_only_expose_connected_ids_and_names(self):
+        result = self.runner.models("opencode_server")
+        self.assertEqual([{"id": "vendor/model-a", "name": "Model A · vendor/model-a"}], result["models"])
+        self.assertNotIn("private-key", json.dumps(result))
+        self.assertEqual(0, self.backend.created)
+        self.assertEqual(str(self.root), self.backend.calls[-1][2]["directory"][0])
+
+    def test_shared_selected_model_and_main_agent_policy(self):
+        job = self.finish(self.launch(self.ticket(), model="vendor/model-a"))
+        self.assertEqual("completed", job["status"], job)
+        self.assertEqual("vendor/model-a", job["model"])
+        self.assertEqual("main_agent_only", job["helper_policy"])
+        args = self.captured["args"]
+        self.assertEqual("vendor/model-a", args[args.index("--model") + 1])
+        self.assertIn("ignore Luna/subagents", self.captured["prompt"])
 
     def test_attached_roundtrip_records_session_and_confirms_core(self):
         req = self.ticket()

@@ -4,7 +4,7 @@
 
 1. 将用户原文保存到本会话 `.runtime/current/user.md`，运行 `turn prepare --input-file`。普通“继续”不手工补人物名或 query；系统从本会话场景生成召回条件。
 2. 检查状态。`ready` 才读取 `.runtime/context-packet.md`；`needs_compaction` 按报告准备、审核、应用记忆后重新 prepare；`budget_blocked` 时检查报告并显式调整预算或压缩范围，不静默删除必需材料。
-3. 起草前完成 `turn-thinking.md` 的判断，按需读取场景写作参考。依包内“有效文风规则”选择当前场景适用的机制分支，不凭近期正文重定文风。本轮临时微调通过 prepare 的 `--style-file` 加载，后续轮恢复持久配置。完整指南在首次需要或发生漂移时读取，不每轮重复加载；包内保留短运行提醒。
+3. 起草前按 `turn-thinking.md` 轻量检查用户意图、人物一致性和自然停点；纠正、漂移或复杂转场时按需使用完整决策卡和场景写作参考。依包内“有效文风规则”选择当前场景适用的机制分支，不凭近期正文重定文风。本轮临时微调通过 prepare 的 `--style-file` 加载，后续轮恢复持久配置。完整指南在首次需要或发生漂移时读取，不每轮重复加载；包内保留短运行提醒。
 4. 在 current 写入 `response.md`、可选 `status.txt`、`scene-patch.json`、`state-updates.json`。只提交改变的状态文件，值是对应文件的完整 Markdown。`status_bar.enabled: false` 时不写 `status.txt`。
 5. `turn commit --operation-id <prepare返回ID>` 显式绑定原操作和源事件位置。失败保留现场，直接重试；已写事件只恢复视图，不追加重复剧情。成功清空 current 并返回收据。已有待提交正文时 prepare 不会覆盖它。
 

@@ -1,49 +1,29 @@
-# Agent 接入与交接
+# Agent 小票接手指南
 
-MCP 是可选工具入口，CLI 保留。主 Agent 负责正文、人物意图、状态补丁、记忆审核及版本选择；面板只执行用户明确发出的管理操作。
+## 只加载一次
 
-用户在面板选择 Codex/OpenCode 直接生成时，本地调度器会以新的平台上下文发送同一张小票。收到后仍按本指南与构筑接口执行；对外回答必须经核心提交。调度器不代替 Agent prepare/commit，也不批准冻结、归档、选中变体或修改平台配置。仅处理小票指定工作区与主题/会话，不用其他平台线程补上下文。平台权限阻塞时保留原操作并说明，不绕过沙箱。
+未加载时读取小票工作区的 `AGENTS.md` 和 [Story Bible Studio 技能](../.agents/skills/story-bible-studio/SKILL.md)（MCP：`studio://skill`），按任务选择必要参考。同一任务不重复读取规范。本文件与 `studio://guide` 内容相同，选一个入口即可。
 
-收到新短小票时直接用 `studio_ticket(ticket_path)` 或小票自带的 `ticket --file` 命令接手，不另读参数文件。返回 kind=bible/bible-recovery 时使用 [构筑接口](../.agents/skills/story-bible-studio/references/construction-workbench.md)，不进入下面的 RP 流程；返回 session/recovery 时继续按本指南操作。完整指令作为备用，旧小票仍可使用。同一任务已经加载的规范不重复读取。
+主模型由平台或工作台选择。Luna/subagents 仅适用于 Codex；非 Codex 由主 Agent 完成整理和召回，压缩阈值仍有效，不调用辅助模型、不改写会话设置。
 
-1. 首次读取项目 `AGENTS.md` 和技能 `SKILL.md`，按任务读取必要参考。MCP 可先读取 `studio://guide`。
-2. `studio_projects` 只列作品；`studio_project` 只列会话和设置元信息。只对用户指定的会话调用 `studio_session`，不检索兄弟会话正文。
-3. 收到小票时调用 `studio_prepare(project, session, request_id)`。直接 RP 时先获取会话 `version`，调用 `studio_prepare(project, session, user_text, expected_version, override)`。用户原文不要改写。
-4. `ready` 才读返回的 `context` 起草。`needs_compaction` 通过 `studio_memory` 准备并审核候选，再应用完整记忆，之后重新 prepare。不要把原始工具结果当成正文。
-5. 正文冷复核后调用 `studio_commit`，传准备返回的 `operation_id`、`regenerate` 和完整的 changed-state Markdown。`scene_patch` 是 JSON 对象，`state_updates` 的键只能为现有五个状态文件名。状态栏关闭时后台仍应维护状态。
-6. 提交中断时原样重试；同一 operation_id 改变正文会被拒绝。成功提交后再向用户展示正文。
-   字数是软目标；差几十字不返工，收据中的 `prose_warning` 只供后续调整，不是提交失败，不为此重跑或增加变体。只有用户明确要求严格字数或改写时才调整。
-7. 重生成用 `regenerate=true`，只能针对最新回合。包从该回合之前的事件投影生成，不包含被替换回复。附加要求是作者指令，不替换原用户角色行为。提交只追加候选，由用户决定是否选中。
-8. 已存在 ready 事务时不得偷偷丢弃或改写。相同直接 prepare 可用原 expected_version 重试；响应丢失或恢复任务时用 `studio_operation(project, session)` 读取原操作和仍有效的上下文。若用户明确要求放弃或重新准备，先调用 `studio_operation(action="archive", operation_id=原ID, expected_version=当前版本, reason=原因)`，草稿和事务完整保存在同会话 `.runtime/archived/<ID>`；再以原输入及需保留的本轮覆盖重新 prepare。CLI 使用 `workbench --operation operation --payload-file <JSON>`，参数相同。
-9. `budget_blocked` 或 `needs_compaction` 且没有草稿时可调整模式/持续配置，再重试同一请求；仅压缩记忆或配置变化允许这种恢复，剧情发生变化仍需显式归档。非 ready 返回分节预算诊断及下一步，不得起草。
+## 接手与提交
 
-## CLI 兼容
+1. 有小票时只调用一次 `studio_ticket(ticket_path)`，或执行小票自带的 `ticket --file` 命令。入口已准备或恢复原任务，**不要再读参数文件或重复 prepare**，不先列作品、会话。MCP 工作区不匹配时使用小票的 CLI。
+2. 按返回 `kind` 分流：`bible/bible-recovery` 使用 [构筑接口](../.agents/skills/story-bible-studio/references/construction-workbench.md)，不加载 RP 流程；`session/recovery` 使用下面的 RP 提交规则。只读取小票指定的主题或会话，其他平台聊天和兄弟会话不能补上下文。
+3. 只有 `ready` 才依据返回的上下文起草并复核。主 Agent 经核心提交成功后展示正文或构筑回答，不能只返回文本。沿用原 `operation_id`、目标和输入；重试原提交，不借用后来任务的 ID。非 ready 按下一节处理。
 
-会话创作要求使用 `studio_requirements`／`workbench --operation requirements`，见技能的 `references/requirements-recovery.md`。保存只影响下一次准备，ready 回复和恢复小票继续使用原快照。正文提交可返回非阻塞 `requirements_check`，不据此自动重写已提交内容。
+小票授权执行原请求，不授权直接改事件、删锁、归档、选择变体、冻结正史、运行 Git 或改平台配置。阻塞时保留原任务并说明。
 
-工作台支持复制恢复指令、保留草稿后重新开始、完成已提交操作的收尾。恢复查询返回原输入、任务类型、覆盖及本地草稿。以事件记录判定是否已提交；`committed` 且 `needs_finish` 时用 `studio_operation(action="finish")`，不追加正文。归档后迟到的原操作不得改用新操作 ID。
+## RP 提交规则
 
-普通 `turn commit` 现在必须携带 `--operation-id <prepare返回ID>`；成功收据丢失时原样重试，不能读取后来任务的 ID 代替原 ID。
+`studio_commit(project, session, operation_id, prose, status, scene_patch, state_updates, regenerate)`：沿用返回的 ID 和 regenerate；scene_patch 为 JSON 对象，state_updates 仅填写改变的五类既有状态文件，值为完整 Markdown。状态栏关闭仍维护动态状态。重生成只存候选，由用户选择。
 
-统一入口：`python -B .agents/skills/story-bible-studio/scripts/story_studio.py workbench --operation <操作> --payload-file <JSON 文件>`。
+本轮按上下文中的文风、输出配置和创作要求快照写作。字数为软目标，成功收据中的 prose_warning/requirements_check 不触发自动重写。
 
-JSON 参数与 MCP 参数一致，操作名为 `projects/project/snapshot/configure/prepare/commit/memory` 等（MCP 前缀和少数描述性工具名称除外）。小票自带可运行的准备命令。
+无 MCP 时，沿用小票的脚本路径和 `--workspace`，调用 `workbench --operation commit --payload-file <JSON>`；JSON 字段与 MCP 一致。直接聊天没有小票才使用 `studio_prepare`；参数与恢复细节按需查下节。
 
-准备之后用 `--operation commit --payload-file <提交文件>`，示例：
+## 仅在需要时读取
 
-```json
-{
-  "project": "作品名",
-  "session": "会话名",
-  "operation_id": "prepare 返回的 ID",
-  "prose": "复核后的完整正文",
-  "status": "",
-  "scene_patch": {},
-  "state_updates": {},
-  "regenerate": false
-}
-```
-
-`variant prepare --project <作品目录> --session <ID> --instructions <重生成要求>` 也可准备最新回合变体；提交仍需携带返回的操作 ID，不能用普通 `turn commit` 追加一轮。
-
-面板中切换会话不会切换平台的聊天上下文。平台若保留其他会话历史，应创建干净任务并用指定会话上下文包恢复。
+- RP 恢复、创作要求变更、`needs_compaction/budget_blocked/stale/archived/damaged` 或锁占用：读 [创作要求与恢复](../.agents/skills/story-bible-studio/references/requirements-recovery.md)。压缩后按原请求重试，不增加用户回合；预算不足不能裁掉必需材料。
+- `committed`：不重复正文；RP 的 `needs_finish=true` 用 `studio_operation(action="finish", operation_id=原ID, expected_version=返回版本)` 收尾。构筑 `pending` 按构筑接口恢复原 payload。
+- 无小票的直接 RP、配置与记忆操作：读 [RP 工作流](../.agents/skills/story-bible-studio/references/roleplay-v3.md) 及其所需参考。面板切会话不会切换平台上下文，先确定目标，不自动复用其他会话历史。

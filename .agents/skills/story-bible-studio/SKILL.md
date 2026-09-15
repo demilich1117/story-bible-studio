@@ -13,7 +13,7 @@ description: 在本地 Markdown 工作区中进行 Story Bible 头脑风暴与�
 - 导入、更新或绑定 User Profile：读 [references/profile-imports.md](references/profile-imports.md)。
 - 写片段、续写或整理章节：读 [references/story-writing.md](references/story-writing.md)。
 - 开始或继续互动扮演：读 [references/roleplay-v3.md](references/roleplay-v3.md)。
-- 写正文前防声线漂移、线性加码与模板化：读 [references/turn-thinking.md](references/turn-thinking.md)，扮演与续写每轮先过停顿关卡再起草。
+- 写正文前防声线漂移、线性加码与模板化：读 [references/turn-thinking.md](references/turn-thinking.md)，普通轮轻量检查用户意图、人物一致性和自然停点；纠正、漂移或复杂转场时按需使用完整决策卡。
 - 长篇会话需要阶段整理或后台候选：额外读 [references/subagents.md](references/subagents.md)。
 - 构筑、导入或精简成人设定：读 [references/nsfw-construction.md](references/nsfw-construction.md)。普通成人续写或扮演读短版 [references/nsfw-runtime.md](references/nsfw-runtime.md)；需要扩展分类或诊断场景写作时，再按需读 [references/nsfw-writing.md](references/nsfw-writing.md)。
 - 选择或调整文风、处理中文语域漂移：读 [references/styles.md](references/styles.md)。用 `style` CLI 展开和保存机制；RP 每轮使用包内有效规则，正式创作使用 `style show`，不凭预设名称或例句代替规则。
@@ -52,10 +52,10 @@ description: 在本地 Markdown 工作区中进行 Story Bible 头脑风暴与�
 
 ## 通用工作方式
 
-- 先定位项目和会话，再运行 `turn prepare`。先检查 status：只有 ready 才读包起草；needs_compaction 先整理记忆再 prepare；budget_blocked 按报告解决超限，不循环压缩相同范围。只读该会话的上下文包，不扫描其他会话或旧包补资料。
+- 仅 RP 会话适用：先定位项目和会话，再运行 `turn prepare`。先检查 status：只有 ready 才读包起草；needs_compaction 先整理记忆再 prepare；budget_blocked 按报告解决超限，不循环压缩相同范围。只读该会话的上下文包，不扫描其他会话或旧包补资料。
 - 用户需求明确时直接写完整正文，不强制展示提纲。
-- 只读取生成的上下文包；检索报告仅在声线缺失、预算排除、连续性异常或调试时读取。
-- 写作前完成私有回合决策卡；写作后冷复核人物声线、因果、强度联动、空间动作、时间、物品和未决伏笔，再用 `turn commit --operation-id <prepare返回ID>` 一次性保存正文与场景补丁。决策卡不输出、不落盘。
+- 仅 RP 会话适用：只读取生成的上下文包；检索报告仅在声线缺失、预算排除、连续性异常或调试时读取。
+- 写作前轻量检查用户意图、人物一致性和自然停点；纠正、漂移或复杂转场时按需使用完整决策卡。写后合并复核当前相关的声线与连续性问题。仅 RP 会话使用 `turn commit --operation-id <prepare返回ID>` 一次性保存正文与场景补丁；正式写作与构筑分别按对应参考执行。决策卡不输出、不落盘。
 - 字数默认是软目标，按目标份量一次起草并自然收束；不要为轻微偏差凑字、裁句、反复计数或重生成。成功收据中的字数提示不是错误，不为此改写已提交回合；只有用户明确要求严格字数或改写时才调整。
 - 状态型会话完成正文后，同一工作单元内同步更新本会话状态；提升为正式章节或片段必须由用户明确要求。
 - 网络研究仅在用户明确要求求证，或情节确实依赖精确的现实机制时进行。人物在普通创作中提到医学、法律、职业或技术名词，不足以单独触发研究；研究结果写入 `素材/研究/`，不自动升格为正史，也不把资料说明和引用塞进沉浸式正文，除非用户要求。
@@ -78,4 +78,4 @@ description: 在本地 Markdown 工作区中进行 Story Bible 头脑风暴与�
 - `memory prepare/apply`：准备阶段摘要并在主 Agent 审核后应用。
 - `scene/index/migrate/validate/milestone`：转场、分作用域检索、v3 项目迁移、验证和 Git 里程碑。
 
-构筑结束先运行 `bible finalize` 审计，修正后用 `bible finalize --apply` 冻结。RP 压缩服从会话的 `memory_policy`：上下文达到软／硬字符阈值或未压缩轮数上限时准备压缩；场景切换本身不独立触发全局压缩，重合时只合并执行一次。场景结束、章节定稿、分支建立或 Story Bible 修订时运行验证并创建 Git 里程碑。检测到其他已暂存内容时不提交。
+构筑结束先运行 `bible finalize` 审计，修正后用 `bible finalize --apply` 冻结。RP 压缩服从会话的 `memory_policy`：上下文达到软／硬字符阈值或未压缩轮数上限时准备压缩；场景切换本身不独立触发全局压缩，重合时只合并执行一次。普通场景结束仅核对受影响的连续性；章节定稿、结构变更、分支建立、Story Bible 修订或明确里程碑时运行完整验证并创建 Git 里程碑。检测到其他已暂存内容时不提交。

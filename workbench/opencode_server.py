@@ -128,6 +128,32 @@ class OpenCodeServer:
         data = self.request("POST", "/session", {"title": title})
         return session_id(data.get("id") if isinstance(data, dict) else None)
 
+    def models(self):
+        self.health()
+        self.check_workspace()
+        data = self.request("GET", "/provider")
+        if not isinstance(data, dict) or not isinstance(data.get("all"), list) or not isinstance(data.get("connected"), list):
+            raise StudioError("OpenCode 模型列表格式不兼容；可手动填写 provider/model。")
+        connected = data["connected"]
+        rows = {}
+        for provider in data["all"]:
+            if not isinstance(provider, dict) or provider.get("id") not in connected:
+                continue
+            pid = provider["id"]
+            models = provider.get("models", {})
+            if not isinstance(pid, str) or not isinstance(models, dict):
+                continue
+            for mid, info in models.items():
+                value = f"{pid}/{mid}"
+                if len(value) > 240 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", value):
+                    continue
+                if not isinstance(info, dict) or info.get("status") == "deprecated":
+                    continue
+                name = info.get("name")
+                rows[value] = {"id": value, "name": f"{name} · {value}" if isinstance(name, str) else value}
+        return {"models": [rows[key] for key in sorted(rows)],
+                "hint": "来自共享后台已连接的提供商；选择后用于下一次生成。"}
+
     def abort(self, sid):
         sid = session_id(sid)
         if self.request("POST", f"/session/{sid}/abort", {}) is not True:

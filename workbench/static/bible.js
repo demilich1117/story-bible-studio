@@ -3,7 +3,8 @@ const $ = selector => document.querySelector(selector);
 const all = selector => [...document.querySelectorAll(selector)];
 const labels = {open:'讨论中', proposal:'候选', complete:'已采用', parked:'已搁置', superseded:'已被修订', ready:'待提交', pending:'提交待恢复', waiting:'待接手', committed:'已完成', stale:'已过期', archived:'已保留归档', budget_blocked:'材料超限'};
 const state = {workspace:'', project:'', graph:null, detail:null, selected:null, event:null, filter:'', scale:.85, collapsed:new Set(), outline:matchMedia('(max-width:640px)').matches, serial:0, detailSerial:0, ticket:null, busy:false};
-const cache = {get(key, fallback=null){try{return JSON.parse(localStorage.getItem('diner:'+key))??fallback;}catch{return fallback;}},set(key,value){try{localStorage.setItem('diner:'+key,JSON.stringify(value));}catch{}}};
+const unsavedStorage=new Map();
+const cache = {get(key, fallback=null){if(unsavedStorage.has(key))return unsavedStorage.get(key);try{return JSON.parse(localStorage.getItem('diner:'+key))??fallback;}catch{return fallback;}},set(key,value){try{localStorage.setItem('diner:'+key,JSON.stringify(value));unsavedStorage.delete(key);return true;}catch{unsavedStorage.set(key,value);$('#storage-warning').hidden=false;return false;}}};
 const projectKey = () => JSON.stringify([state.workspace,state.project]);
 const draftKey = () => 'bible-draft:'+JSON.stringify([state.workspace,state.project,state.selected]);
 function message(text){$('#toast').textContent=text;$('#toast').hidden=false;clearTimeout(message.timer);message.timer=setTimeout(()=>$('#toast').hidden=true,6000);}
@@ -14,23 +15,30 @@ async function api(op,params={},write=false){
   if(write)state.busy=true;
   try{const response=await fetch('/api/'+op+(write?'':'?'+new URLSearchParams(Object.entries(params).filter(([,v])=>v!=null))),write?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state.token},body:JSON.stringify(params)}:{});const data=await response.json();if(!response.ok)throw Error(data.error||'读取失败');return data;}finally{if(write)state.busy=false;}
 }
-function saveDraft(){if(state.selected)cache.set(draftKey(),$('#idea-input').value);}
-function saveView(){if(!state.project)return;cache.set('bible-view:'+projectKey(),{selected:state.selected,filter:state.filter,scale:state.scale,collapsed:[...state.collapsed],outline:state.outline,past:$('#show-past').checked,x:$('#map-viewport').scrollLeft,y:$('#map-viewport').scrollTop});}
+function saveDraft(){if(state.selected){const saved=cache.set(draftKey(),$('#idea-input').value);$('#idea-draft-hint').textContent=saved?'输入已保存在此浏览器':'输入尚未保存，请复制备份';}}
+function saveView(){if(!state.project)return;const view={selected:state.selected,filter:state.filter,scale:state.scale,collapsed:[...state.collapsed],outline:state.outline,past:$('#show-past').checked,x:$('#map-viewport').scrollLeft,y:$('#map-viewport').scrollTop,detailY:$('#bible-detail').scrollTop};cache.set('bible-view:'+projectKey(),view);const params=new URL(location.href).searchParams;if(params.get('project')===state.project&&params.get('topic')===state.selected&&params.get('event')===state.event)history.replaceState({...history.state,view},'');}
+function syncRoute(mode='push'){
+  const params=new URLSearchParams({project:state.project});if(state.selected)params.set('topic',state.selected);if(state.event)params.set('event',state.event);
+  const url='/bible?'+params;history[mode==='replace'||url===location.pathname+location.search?'replaceState':'pushState']({},'',url);saveView();
+}
+async function openRoute(view=null){const params=new URL(location.href).searchParams,project=params.get('project');if(!state.projects.some(p=>p.id===project))throw Error('链接中的作品不存在，请选择作品。');await selectProject(project,{mode:'none',topic:params.get('topic'),event:params.get('event'),view,restore:false});}
+window.addEventListener('popstate',()=>task(async()=>{if(new URL(location.href).searchParams.has('project'))await openRoute(history.state?.view);else await selectProject(state.project,{mode:'replace'});})());
 function applyScale(){const plane=$('#map-plane');plane.style.transform=`scale(${state.scale})`;$('#map-size').style.width=(state.mapWidth||900)*state.scale+'px';$('#map-size').style.height=(state.mapHeight||600)*state.scale+'px';$('#zoom-value').textContent=Math.round(state.scale*100)+'%';}
 function focusNode(id){const node=all('.map-node').find(n=>n.dataset.node===id);if(!node)return;const view=$('#map-viewport');view.scrollTo(Math.max(0,(parseFloat(node.style.left)+107)*state.scale-view.clientWidth/2),Math.max(0,(parseFloat(node.style.top)+39)*state.scale-view.clientHeight/2));}
 function setMode(){const has=!!state.graph;$('#map-viewport').hidden=!has||state.outline;$('#bible-outline').hidden=!has||!state.outline;$('#map-mode').setAttribute('aria-pressed',String(!state.outline));$('#outline-mode').setAttribute('aria-pressed',String(state.outline));$('.zoom-tools').hidden=state.outline;saveView();}
-async function selectProject(id){
+async function selectProject(id,navigation={}){
+  saveNewTopicDraft();$('#new-topic-dialog').close();
   saveDraft();saveView();const serial=++state.serial;++state.detailSerial;state.project=id;state.selected=null;state.detail=null;state.event=null;state.filter='';state.graph=null;
   $('#detail-content').hidden=true;$('#detail-empty').hidden=false;$('#bible-detail').classList.remove('open');
   $('#bible-project').value=id;$('#new-topic').disabled=!id;if(!id){render();return;}
   cache.set('project:'+state.workspace,id);
-  const saved=cache.get('bible-view:'+projectKey(),{});state.scale=saved.scale||.85;state.filter=saved.filter||'';state.outline=saved.outline??matchMedia('(max-width:640px)').matches;$('#show-past').checked=!!saved.past;
+  const saved=navigation.view||cache.get('bible-view:'+projectKey(),{});state.scale=saved.scale||.85;state.filter=navigation.topic&&!navigation.view?'':saved.filter||'';state.outline=saved.outline??matchMedia('(max-width:640px)').matches;$('#show-past').checked=!!saved.past;$('#bible-search').value='';
   const graph=await api('bible_view',{project:id});if(serial!==state.serial)return;state.graph=graph;state.collapsed=new Set(saved.collapsed||graph.modules.map(m=>'module:'+m));
   state.ticket=cache.get('bible-ticket:'+projectKey());render();
-  const target=new URL(location.href).searchParams.get('topic')||saved.selected;
-  if(target&&graph.topics.some(t=>t.id===target))await selectTopic(target,false);
-  requestAnimationFrame(()=>{if(typeof saved.x==='number'){$('#map-viewport').scrollLeft=saved.x;$('#map-viewport').scrollTop=saved.y||0;}else if(state.selected)focusNode(state.selected);});
-  history.replaceState(null,'','/bible?'+new URLSearchParams({project:id}));
+  const target=navigation.topic||(navigation.restore===false?null:saved.selected);
+  if(target){if(!graph.topics.some(t=>t.id===target))throw Error('链接中的主题不存在，请从目录选择主题。');await selectTopic(target,true,navigation.event||null,'none');}
+  requestAnimationFrame(()=>{if(serial!==state.serial)return;if(typeof saved.x==='number'&&(!navigation.topic||navigation.view)){$('#map-viewport').scrollLeft=saved.x;$('#map-viewport').scrollTop=saved.y||0;}else if(state.selected)focusNode(state.selected);$('#bible-detail').scrollTop=navigation.view?.detailY||0;});
+  if(navigation.mode!=='none')syncRoute(navigation.mode||'push');
 }
 function visibleTopics(){const query=$('#bible-search').value.trim().toLocaleLowerCase();return (state.graph?.topics||[]).filter(t=>(!state.filter||t.module===state.filter)&&($('#show-past').checked||!['parked','superseded'].includes(t.status))&&(!query||(t.title+' '+t.summary).toLocaleLowerCase().includes(query)));}
 function render(){
@@ -60,8 +68,9 @@ function hierarchy(){
 }
 function renderGraph(){
   const plane=$('#map-plane');plane.replaceChildren();if(!state.graph)return;
+  const query=$('#bible-search').value.trim(),count=visibleTopics().length;$('#search-result').hidden=!query&&count>0;$('#search-result').textContent=count?`找到 ${count} 个主题`:'没有匹配的主题。试试其他词、清空分类或显示旧方向。';
   const tree=hierarchy(),nodes=[],links=[];let row=0;
-  function walk(node,depth){node.x=30+depth*278;const expanded=!state.collapsed.has(node.id)&&(node.kind!=='topic'||state.selected===node.id||state.expandedTopic===node.id);const children=expanded?node.children:[];if(children.length){for(const child of children){walk(child,depth+1);links.push([node,child]);}node.y=(children[0].y+children.at(-1).y)/2;}else{node.y=30+row*110;row++;}node.expanded=expanded;nodes.push(node);}
+  function walk(node,depth){node.x=30+depth*278;const expanded=!!query&&['root','module'].includes(node.kind)||!state.collapsed.has(node.id)&&(node.kind!=='topic'||state.selected===node.id||state.expandedTopic===node.id);const children=expanded?node.children:[];if(children.length){for(const child of children){walk(child,depth+1);links.push([node,child]);}node.y=(children[0].y+children.at(-1).y)/2;}else{node.y=30+row*110;row++;}node.expanded=expanded;nodes.push(node);}
   walk(tree,0);state.mapWidth=Math.max(600,...nodes.map(n=>n.x+250));state.mapHeight=Math.max(400,row*110+70);
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('width',String(state.mapWidth));svg.setAttribute('height',String(state.mapHeight));svg.setAttribute('aria-hidden','true');
   for(const [from,to] of links){const path=document.createElementNS(svg.namespaceURI,'path');const x1=from.x+214,y1=from.y+39,x2=to.x,y2=to.y+39;path.setAttribute('d',`M${x1},${y1} C${x1+32},${y1} ${x2-32},${y2} ${x2},${y2}`);svg.append(path);}
@@ -72,12 +81,12 @@ function renderGraph(){
   applyScale();
 }
 function renderOutline(){const outline=$('#bible-outline');outline.replaceChildren();if(!state.graph)return;const topics=visibleTopics();for(const module of [...new Set(topics.map(t=>t.module))]){const group=element('details');group.open=true;group.append(element('summary','',module.replace(/\.md$/,'')));for(const topic of topics.filter(t=>t.module===module)){const button=element('button');button.type='button';button.append(element('strong','',topic.title),element('small','',`${labels[topic.status]} · ${topic.summary}`));button.onclick=task(()=>selectTopic(topic.id));group.append(button);}outline.append(group);}}
-async function selectTopic(id,open=true,eventId=null){
-  saveDraft();const serial=++state.detailSerial,project=state.project;
+async function selectTopic(id,open=true,eventId=null,mode='push'){
+  saveDraft();saveView();const serial=++state.detailSerial,project=state.project;
   const detail=await api('bible_view',{project,topic_id:id,event_id:eventId});if(serial!==state.detailSerial||project!==state.project)return;
   state.selected=id;state.detail=detail;state.event=eventId;state.history=detail.history;state.collapsed.delete('module:'+detail.topic.module);state.collapsed.delete(id);
   $('#idea-input').value=cache.get(draftKey(),detail.topic.draft||'');$('#detail-content').hidden=false;$('#detail-empty').hidden=true;if(open){document.body.classList.remove('detail-closed');$('#bible-detail').classList.add('open');}
-  renderDetail();renderGraph();if(open&&!state.outline)focusNode(id);saveView();
+  renderDetail();renderGraph();if(open&&!state.outline)focusNode(id);if(open&&mode!=='none')syncRoute(mode);saveView();
 }
 function renderDetail(){
   const {topic,canon,event}=state.detail;$('#topic-title').textContent=topic.title;$('#topic-status').textContent=labels[topic.status]||topic.status;$('#topic-module').textContent=topic.module;$('#topic-decision').textContent=topic.decision||'这个想法还在慢慢成形。';$('#topic-canon').textContent=canon||'还没有写入该模块的设定。';
@@ -102,8 +111,19 @@ async function request(kind){agentPanel.check();const project=state.project,user
 $('#bible-project').onchange=task(e=>selectProject(e.target.value));$('#bible-search').oninput=()=>{renderGraph();renderOutline();};$('#show-past').onchange=()=>{render();saveView();};$('#map-mode').onclick=()=>{state.outline=false;setMode();};$('#outline-mode').onclick=()=>{state.outline=true;setMode();};
 $('#zoom-in').onclick=()=>{state.scale=Math.min(1.5,state.scale+.1);applyScale();saveView();};$('#zoom-out').onclick=()=>{state.scale=Math.max(.3,state.scale-.1);applyScale();saveView();};$('#fit-map').onclick=()=>{const view=$('#map-viewport');state.scale=Math.max(.3,Math.min(1,(view.clientWidth-30)/state.mapWidth,(view.clientHeight-30)/state.mapHeight));applyScale();view.scrollTo(0,0);saveView();};
 $('#idea-input').oninput=saveDraft;$('#save-idea').onclick=task(async()=>{await edit('draft');message('草稿已保存。');await refresh();});$('#park-idea').onclick=task(async()=>{await edit('park');message('这个方向已搁置，可在旧方向中找到。');await refresh();});$('#continue-idea').onclick=task(()=>request('continue'));$('#revise-idea').onclick=task(()=>request('revise'));
-$('#new-topic').onclick=()=>{if(!state.project)return message('先选择作品。');$('#new-topic-title').value='';$('#new-topic-text').value='';$('#new-topic-module').value=state.filter||'核心概念.md';$('#new-topic-dialog').showModal();};
-$('#new-topic-form').onsubmit=task(async event=>{event.preventDefault();const result=await api('bible_edit',{project:state.project,action:'create',title:$('#new-topic-title').value,module:$('#new-topic-module').value,text:$('#new-topic-text').value},true);$('#new-topic-dialog').close();state.filter='';await refresh();await selectTopic(result.topic.id);});
+const newTopicKey=()=> 'bible-new-topic:'+projectKey();
+function saveNewTopicDraft(){if(!$('#new-topic-dialog').open)return;const saved=cache.set(newTopicKey(),{title:$('#new-topic-title').value,text:$('#new-topic-text').value,module:$('#new-topic-module').value});$('#new-topic-draft-hint').textContent=saved?'草稿已保留，关闭后可以继续填写。':'草稿尚未保存，请复制备份';}
+$('#new-topic-form').addEventListener('input',saveNewTopicDraft);
+$('#new-topic').onclick=()=>{if(!state.project)return message('先选择作品。');const draft=cache.get(newTopicKey(),{})||{};$('#new-topic-title').value=draft.title||'';$('#new-topic-text').value=draft.text||'';$('#new-topic-module').value=draft.module||state.filter||'核心概念.md';$('#new-topic-dialog').showModal();$('#new-topic-title').focus();};
+$('#new-topic-form').onsubmit=task(async event=>{
+  event.preventDefault();const project=state.project,key=newTopicKey();
+  const draft={title:$('#new-topic-title').value,text:$('#new-topic-text').value,module:$('#new-topic-module').value};
+  const result=await api('bible_edit',{project,action:'create',...draft},true);
+  const current=cache.get(key);if(!current||JSON.stringify(current)===JSON.stringify(draft))cache.set(key,null);
+  if(project!==state.project)return;
+  $('#new-topic-dialog').close();state.filter='';await refresh();await selectTopic(result.topic.id);
+});
+$('#copy-topic-link').onclick=()=>copy(location.origin+'/bible?'+new URLSearchParams({project:state.project,topic:state.selected,...(state.event?{event:state.event}:{})}));
 $('#recover-bible').onclick=task(async()=>{const result=await api('bible_edit',{project:state.project,action:'recovery',operation_id:state.graph.pending.operation_id},true);showTicket(result);await copy(result.instruction);});
 $('#archive-bible').onclick=task(async()=>{await api('bible_edit',{project:state.project,action:'archive',operation_id:state.graph.pending.operation_id,text:'用户选择保留当前准备材料并重新准备'},true);message('原任务已保留，可以修改要求后重新复制指令。');await refresh();});
 $('#last-bible-ticket').onclick=()=>{if(state.ticket)showTicket(state.ticket);};$('#copy-bible-ticket').onclick=()=>copy($('#bible-ticket-text').value);$('#bible-ticket-format').onclick=()=>{fullTicket=!fullTicket;$('#bible-ticket-text').value=fullTicket?ticketShown.full_instruction:ticketShown.instruction;$('#bible-ticket-format').textContent=fullTicket?'短指令':'完整指令';};$('#close-detail').onclick=()=>{document.body.classList.add('detail-closed');$('#bible-detail').classList.remove('open');};$('#clear-history-focus').onclick=task(()=>selectTopic(state.selected));
@@ -111,8 +131,20 @@ $('#previous-topic').onclick=task(()=>{ $('#show-past').checked=true;return sele
 $('#more-history').onclick=task(async()=>{const project=state.project,selected=state.selected;const result=await api('bible_view',{project,topic_id:selected,cursor:state.detail.next_cursor});if(project!==state.project||selected!==state.selected)return;state.history.push(...result.history);state.detail.next_cursor=result.next_cursor;renderHistory();});
 for(const button of all('[data-close]'))button.onclick=()=>button.closest('dialog').close();
 const viewport=$('#map-viewport');let drag=null;viewport.addEventListener('pointerdown',event=>{if(event.pointerType!=='mouse'||event.target.closest('button')||event.button!==0)return;drag={x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging');});viewport.addEventListener('pointermove',event=>{if(drag){viewport.scrollLeft=drag.left+drag.x-event.clientX;viewport.scrollTop=drag.top+drag.y-event.clientY;}});for(const name of ['pointerup','pointercancel'])viewport.addEventListener(name,()=>{drag=null;viewport.classList.remove('dragging');saveView();});viewport.addEventListener('scroll',()=>{clearTimeout(viewport.saveTimer);viewport.saveTimer=setTimeout(saveView,150);});
-$('#theme-button').onclick=()=>{const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';cache.set('bible-theme',dark?'dark':'light');};
-window.addEventListener('beforeunload',()=>{saveDraft();saveView();});
-async function boot(){document.documentElement.dataset.theme=cache.get('bible-theme','light');const boot=await api('bootstrap');state.token=boot.token;state.workspace=boot.workspace_id;const projects=await api('projects');$('#bible-project').replaceChildren(element('option','','选择作品'));$('#bible-project').firstChild.value='';for(const project of projects){const option=element('option','',project.name);option.value=project.id;$('#bible-project').append(option);}const chosen=new URL(location.href).searchParams.get('project')||cache.get('project:'+state.workspace);await selectProject(projects.some(p=>p.id===chosen)?chosen:(projects[0]?.id||''));setInterval(refresh,2500);}
+$('#theme-button').onclick=()=>{const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';cache.set('theme',dark?'dark':'light');};
+window.addEventListener('storage',event=>{if(event.key==='diner:theme')document.documentElement.dataset.theme=cache.get('theme','light');});
+window.addEventListener('beforeunload',event=>{saveDraft();saveView();saveNewTopicDraft();if(unsavedStorage.size){event.preventDefault();event.returnValue='';}});
+async function boot(){
+  document.documentElement.dataset.theme=cache.get('theme',cache.get('reading',{})?.theme||cache.get('bible-theme','light'));
+  cache.set('theme',document.documentElement.dataset.theme);
+  const boot=await api('bootstrap');state.token=boot.token;state.workspace=boot.workspace_id;
+  const projects=await api('projects');state.projects=projects;
+  $('#bible-project').replaceChildren(element('option','','选择作品'));$('#bible-project').firstChild.value='';
+  for(const project of projects){const option=element('option','',project.name);option.value=project.id;$('#bible-project').append(option);}
+  history.scrollRestoration='manual';
+  if(new URL(location.href).searchParams.has('project')){try{await openRoute(history.state?.view);}catch(error){message(error.message);}}
+  else{const chosen=cache.get('project:'+state.workspace);await selectProject(projects.some(p=>p.id===chosen)?chosen:(projects[0]?.id||''),{mode:'replace'});}
+  setInterval(refresh,2500);
+}
 const agentPanel=new AgentPanel(api,()=>[state.workspace,'bible',state.project,state.selected],()=>refresh());
 boot().then(()=>agentPanel.init()).catch(error=>message(error.message));

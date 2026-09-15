@@ -43,5 +43,16 @@ main:has(#session-view:not([hidden])){padding-bottom:88px}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 .request-track{max-width:var(--reading-width);margin:14px auto;font-size:12px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;gap:12px}.request-track button{font-size:12px}.request-track:has([hidden]+[hidden]){display:none}
 
+/* Keep the reading surface primary; the menu opens only when it is needed. */
+.effective-menu{padding:4px 0 18px;border-bottom:3px double var(--line);margin-bottom:16px}
+.effective-menu>p{margin:0 0 12px}.effective-menu dl{margin:0;font-size:13px;line-height:1.8}
+.effective-menu dl>div{display:flex;justify-content:space-between;gap:12px;margin:5px 0}.effective-menu dt{color:var(--muted)}.effective-menu dd{margin:0;text-align:right;font-weight:600}
+.settings-editor{border-bottom:1px solid var(--line);padding:0 0 18px;margin-bottom:18px}.settings-editor>summary{font-weight:600;cursor:pointer;font-size:14px;padding:8px 0}.settings-editor[open]>summary{margin-bottom:12px}
+.reading-nav{flex-wrap:wrap;justify-content:center}.reading-nav [hidden]{display:none!important}
+.story-tools{flex-wrap:wrap}.story-tools button{white-space:nowrap}
+#storage-warning{font-size:13px;line-height:1.7}#composer{scroll-margin-top:16px}
+@media(max-width:640px){.reading-nav{gap:6px;padding:6px;bottom:10px}.reading-nav button{padding:7px 9px;min-height:36px}.reading-nav form{flex-basis:100%;justify-content:center}.reading-nav input{width:68px}main:has(#session-view:not([hidden])){padding-bottom:132px}.effective-menu dl{font-size:14px}}
+
 .agent-panel{margin:12px 0;padding:12px 0;border-top:1px solid var(--line,#d6c7b5)}
+.agent-panel #agent-model-fields{margin-top:12px}.agent-panel #agent-model-custom-field{margin-top:8px}.agent-panel #agent-job-model{overflow-wrap:anywhere}
 .agent-panel .field{margin:0}.agent-panel p{margin:8px 0}.agent-actions{display:flex;gap:8px;flex-wrap:wrap}.agent-panel #agent-reply{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-size:14px;line-height:1.7}.agent-panel summary{cursor:pointer;margin:10px 0}

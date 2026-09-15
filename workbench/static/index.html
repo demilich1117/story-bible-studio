@@ -21,9 +21,10 @@
       <button id="stop-button" class="text-button close-shop">关闭本地后台</button>
     </aside>
     <main id="main">
+      <p id="storage-warning" class="notice" role="alert" hidden>浏览器存储不可用，部分草稿或偏好仅暂存在此页面。离开前请复制输入备份。</p>
       <section class="welcome" id="welcome"><div><span class="eyebrow">OPEN FOR IMAGINATION</span><h1>故事还热着，<br>请慢用<span>。</span></h1><p>选一张卡座，调好口味。<br>下一段，依旧由你和角色决定。</p><span class="pill">LOCAL STORIES · ALWAYS YOURS</span></div><div class="meal" aria-hidden="true"><svg class="hero-cola"><use href="/diner.svg#cola"/></svg><svg class="hero-fries"><use href="/diner.svg#fries"/></svg><svg class="hero-burger"><use href="/diner.svg#burger"/></svg><svg class="hero-cheese"><use href="/diner.svg#cheese"/></svg><span class="meal-label">DOUBLE CHEESE<br>DOUBLE THE STORY</span></div></section>
       <section id="session-view" hidden>
-        <div class="story-top"><div><span class="eyebrow" id="project-label">NOW SERVING</span><h1 id="session-title"></h1><p id="session-meta" class="muted"></p></div><div class="story-tools"><button id="checkpoint-button">留个书签</button><button id="branch-button">故事分支</button><svg aria-hidden="true"><use href="/diner.svg#burger"/></svg></div></div>
+        <div class="story-top"><div><span class="eyebrow" id="project-label">NOW SERVING</span><h1 id="session-title"></h1><p id="session-meta" class="muted"></p></div><div class="story-tools"><button id="checkpoint-button">留个书签</button><button id="branch-button">故事分支</button><button id="copy-session-link" type="button">会话链接</button><svg aria-hidden="true"><use href="/diner.svg#burger"/></svg></div></div>
         <div id="pending-notice" class="notice" hidden>本桌有待完成回合。可以继续阅读；请在 Agent 完成提交后再调整设置。</div>
         <section id="recovery-panel" class="recovery-panel" hidden aria-label="未完成回合恢复"><div id="operation-list"></div><p class="small muted">恢复指令可交给原平台或其他 Agent；仅能恢复已保存到本地的草稿。</p></section>
         <div id="restart-available" class="restart-available" hidden><span>上次重新开始的输入已保留。</span><button id="restore-restart" type="button">找回原输入</button><button id="restore-composer-backup" type="button" hidden>找回输入框备份</button><button id="leave-recovery" type="button" hidden>退出原任务恢复</button></div>
@@ -33,7 +34,7 @@
         <div class="endmark" aria-hidden="true">✦ &nbsp; TO BE CONTINUED &nbsp; ✦</div>
         <nav class="reading-nav" aria-label="回合导航">
           <form id="turn-jump-form"><label class="sr-only" for="turn-jump">跳转到第几轮</label><input id="turn-jump" type="number" min="1" step="1" required placeholder="回合"><span id="turn-count" class="muted small"></span><button id="jump-button" type="submit">跳转</button></form>
-          <button id="back-to-top" type="button">↑ 回到顶部</button>
+          <button id="back-to-top" type="button">↑ 顶部</button><button id="write-reply" class="primary" type="button">写回应</button><button id="return-to-reading" type="button" hidden>返回原文</button>
         </nav>
       </section>
       <section id="composer" class="composer" hidden><div class="composer-top"><span class="eyebrow">YOUR NEXT ORDER</span><span id="draft-hint">草稿只保存在此浏览器</span></div><label class="sr-only" for="user-input">下一轮输入或重生成要求</label><textarea id="user-input" placeholder="写下你的回应，或这次想怎样重新生成…" rows="3"></textarea><div id="override-note" class="muted" hidden></div><div id="agent-panel" class="agent-panel"></div><div class="composer-actions"><span>发送后在这里查看结果</span><div><button id="regen-button">重生成</button><button id="continue-button" class="primary">发送续玩 <span aria-hidden="true">↗</span></button></div></div></section>
@@ -43,7 +44,8 @@
     <aside id="settings" class="settings">
       <div class="menu-title"><span class="eyebrow">MAKE IT YOURS</span><h2>本桌菜单</h2><svg aria-hidden="true"><use href="/diner.svg#cheese"/></svg></div>
       <p class="muted small">调一点字数，加一点主动性。</p>
-      <details id="requirements-panel" class="requirements-panel" open>
+      <section class="effective-menu" aria-label="当前有效设置"><p id="effective-scope" class="small muted">本会话当前生效</p><dl id="effective-settings"></dl></section>
+      <details id="requirements-panel" class="requirements-panel">
         <summary>本会话创作要求 <span id="requirements-count" class="muted small"></span></summary>
         <p id="requirements-hint" class="small muted" role="status">选一个会话，保存它的写作偏好。</p>
         <fieldset id="requirements-fields" disabled>
@@ -53,6 +55,7 @@
           <button id="reload-requirements" type="button" class="text-button" hidden>查看最新保存版本并合并</button>
         </fieldset>
       </details>
+      <details id="settings-editor" class="settings-editor"><summary>调整字数与互动方式</summary>
       <label class="field">这份设置用多久？<select id="scope"><option value="session">本会话 · 持续生效</option><option value="turn">本轮 · 随小票交接</option><option value="project">新会话默认</option></select></label>
       <form id="config-form"><fieldset id="config-fields" disabled>
         <div class="menu-group"><span class="eyebrow">01 / THE MAIN COURSE</span>
@@ -76,6 +79,7 @@
         <button class="primary full" type="submit" id="save-config">保存这份菜单</button><p id="config-hint" class="small muted">只保存你改动的选项。</p>
         <div class="reset-row"><select id="reset-module" aria-label="选择重置模块"><option value="prose">字数</option><option value="status_bar">状态栏</option><option value="bilingual">双语</option><option value="short-rp">短 RP 微调</option><option value="person">人称</option><option value="agency">扮演权限</option><option value="initiative">主动性</option><option value="span">跨度</option></select><button type="button" id="reset-config">重置</button><button type="button" id="undo-config">撤销</button></div>
       </fieldset></form>
+      </details>
       <details class="extras"><summary>文风与上下文份量</summary><label class="field">文风<select id="style-select"></select></label><button id="save-style" class="full">采用文风</button><label class="field">上下文模式<select id="mode-select"><option value="quality">质量</option><option value="economy">节省</option></select></label><button id="save-mode" class="full">采用模式</button><p class="small muted">模式影响上下文预算，不改变正文字数。文风与模式在本轮范围下不提供修改。</p></details>
       <div class="menu-foot"><svg aria-hidden="true"><use href="/diner.svg#cola"/></svg><p>STAY A LITTLE LONGER.<br><strong>故事可以续杯。</strong></p></div>
     </aside>

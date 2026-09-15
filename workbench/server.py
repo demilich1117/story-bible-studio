@@ -87,6 +87,9 @@ class Handler(BaseHTTPRequestHandler):
                 op = parsed.path[5:]
                 if op == "agent_providers":
                     return self.reply(200, self.server.agents.providers())
+                if op == "agent_models":
+                    params = parse_qs(parsed.query)
+                    return self.reply(200, self.server.agents.models(params.get("provider", [""])[-1]))
                 if op == "agent_status":
                     params = parse_qs(parsed.query)
                     return self.reply(200, self.server.agents.status(params.get("job_id", [""])[-1]))

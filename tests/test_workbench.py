@@ -279,6 +279,11 @@ class MCPProtocolTests(__import__('unittest').TestCase):
                     self.assertFalse(response.isError)
                     guide=await session.read_resource('studio://guide')
                     self.assertTrue(guide.contents)
+                    guide_text = guide.contents[0].text
+                    self.assertIn('studio://skill', guide_text)
+                    self.assertNotIn('## 不可破坏的分层', guide_text)
+                    skill = await session.read_resource('studio://skill')
+                    self.assertIn('## 不可破坏的分层', skill.contents[0].text)
                     self.assertIn('studio_operation', [t.name for t in tools.tools])
                     self.assertIn('studio_requirements', [t.name for t in tools.tools])
                     from diner_fixture import create_demo

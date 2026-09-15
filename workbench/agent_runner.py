@@ -16,6 +16,8 @@ from studio_bible_workbench import short_ticket
 from studio_core import StudioError, LockError, atomic_write_json, session_lock, utc_now
 from studio_construction_history import read_event
 from opencode_server import OpenCodeServer
+from codex_models import discover_models, reasoning_value
+from codex_cli import codex_executable
 
 ACTIVE = {"starting", "running", "stopping"}
 
@@ -39,6 +41,8 @@ def opencode_installation():
 def executable(provider):
     if provider not in {"codex", "opencode"}:
         raise StudioError("请选择 Codex 或 OpenCode")
+    if provider == "codex":
+        return codex_executable()
     value = os.environ.get("STORY_STUDIO_" + provider.upper()) or shutil.which(provider)
     desktop = None
     if not value and provider == "opencode":
@@ -54,11 +58,41 @@ def executable(provider):
     return str(path)
 
 
-def command(provider, binary, workspace, prompt, server=None, platform_session=None):
+def model_id(provider, value):
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or len(value) > 240 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", value):
+        raise StudioError("模型 ID 无效；请填写平台模型 ID，不要填写命令或参数。")
+    if provider in {"opencode", "opencode_server"} and ("/" not in value or not all(value.split("/", 1))):
+        raise StudioError("OpenCode 模型须使用 provider/model 格式。")
+    return value
+
+
+def platform_policy(provider):
+    if provider == "codex":
+        return "Platform: Codex."
+    return ("Platform: OpenCode; ignore Luna/subagents. The main agent handles compaction and recall; "
+            "all memory thresholds still apply. Do not change story settings.")
+
+
+def dispatch_prompt(workspace, ticket_path, provider):
+    return (f"Follow {ROOT / 'workbench/agent-guide.md'} (read once per task). "
+            "Execute only this ticket; its entry point already prepares or resumes the operation. "
+            "Review and commit through the core before replying.\n"
+            + platform_policy(provider) + "\n\n" + short_ticket(workspace, Path(ticket_path)))
+
+
+def command(provider, binary, workspace, prompt, server=None, platform_session=None, model=None, reasoning_effort=None):
+    model = model_id(provider, model)
+    reasoning_effort = reasoning_value(provider, reasoning_effort)
     if provider == "codex":
         return [binary, "exec", "--json", "--color", "never", "--sandbox", "workspace-write",
-                "-c", 'approval_policy="never"', "--skip-git-repo-check", "-C", str(workspace), "-"], prompt
+                "-c", 'approval_policy="never"', "--skip-git-repo-check", "-C", str(workspace),
+                *(["--model", model] if model else []),
+                *(["-c", f'model_reasoning_effort="{reasoning_effort}"'] if reasoning_effort else []), "-"], prompt
     args = [binary, "run", "--format", "json", "--dir", str(workspace)]
+    if model:
+        args += ["--model", model]
     if provider == "opencode_server":
         args += ["--attach", server.url, "--session", platform_session]
     return [*args, prompt], None
@@ -75,6 +109,7 @@ class AgentRunner:
         self.worker = None
         self.cancel = threading.Event()
         self.closed = False
+        self.codex_catalog = None
 
     def providers(self):
         rows = []
@@ -157,9 +192,44 @@ class AgentRunner:
             job["message"] = "后台连接已中断；先确认原任务已停止，再重试或复制恢复小票。"
         return job
 
-    def start(self, ticket_path, provider, retry=False):
+    def models(self, provider):
+        if provider == "codex":
+            catalog = discover_models(executable("codex"), self.service.workspace)
+            self.codex_catalog = catalog
+            return catalog
+        if provider == "opencode_server":
+            return OpenCodeServer.configured(self.service.workspace).models()
+        if provider != "opencode":
+            raise StudioError("请选择 Codex 或 OpenCode")
+        try:
+            result = subprocess.run([executable("opencode"), "models"], cwd=self.service.workspace,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                encoding="utf-8", errors="replace", timeout=15, shell=False,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except (OSError, subprocess.TimeoutExpired):
+            raise StudioError("模型列表读取失败或超时；可重试，或手动填写 provider/model。") from None
+        if result.returncode:
+            raise StudioError("无法读取 OpenCode 模型列表；请检查 CLI 配置，或手动填写 provider/model。")
+        ids = set()
+        for line in result.stdout.splitlines():
+            try:
+                value = model_id(provider, line.strip())
+                if value:
+                    ids.add(value)
+            except StudioError:
+                continue
+        return {"models": [{"id": value, "name": value} for value in sorted(ids)],
+                "hint": "来自本机 OpenCode 模型列表；可用权限以平台账号为准。"}
+
+    def start(self, ticket_path, provider, retry=False, model=None, reasoning_effort=None):
         if type(retry) is not bool:
             raise StudioError("retry 必须为布尔值")
+        model = model_id(provider, model)
+        reasoning_effort = reasoning_value(provider, reasoning_effort)
+        if reasoning_effort and self.codex_catalog:
+            selected = next((row for row in self.codex_catalog["models"] if row["id"] == model), None)
+            if selected and reasoning_effort not in selected["reasoning_efforts"]:
+                raise StudioError("所选模型不支持此推理强度，请重新选择。")
         binary = executable("opencode" if provider == "opencode_server" else provider)
         conn = OpenCodeServer.configured(self.service.workspace) if provider == "opencode_server" else None
         info = self.ticket_info(ticket_path)
@@ -180,7 +250,7 @@ class AgentRunner:
             started = threading.Event()
             errors = []
             self.worker = threading.Thread(target=self._run,
-                args=(job_id, info, provider, binary, started, errors, conn), daemon=True)
+                args=(job_id, info, provider, binary, started, errors, conn, model, reasoning_effort), daemon=True)
             self.worker.start()
         if not started.wait(10):
             raise StudioError("任务正在启动，请刷新查看状态；不要重复发送。")
@@ -203,8 +273,10 @@ class AgentRunner:
             job["reply"] = event.get("data", {}).get("transcript", {}).get("assistant", job["reply"])
         self._save(job, status="completed", message="已提交，工作台会自动更新。", **updates)
 
-    def _run(self, job_id, info, provider, binary, started, errors, conn=None):
+    def _run(self, job_id, info, provider, binary, started, errors, conn=None, model=None, reasoning_effort=None):
         job = {"id": job_id, **info, "provider": provider, "created_at": utc_now(),
+               "model": model, "reasoning_effort": reasoning_effort,
+               "helper_policy": "session" if provider == "codex" else "main_agent_only",
                "status": "starting", "message": "正在启动 Agent", "reply": ""}
         proc = None
         watchdog = None
@@ -227,17 +299,7 @@ class AgentRunner:
                         return
                     self._save(job)
                     started.set()
-                    prompt = (f"Read {ROOT / 'AGENTS.md'} and {ROOT / 'workbench/agent-guide.md'} first. "
-                              "Execute only the saved Story Bible Studio ticket below, using its specified workspace. "
-                              "Read only this ticket's construction topic or RP session context. "
-                              "You are the writing agent: prepare, review, and commit through the existing core. "
-                              "For construction, save the full public answer, decision and next_prompt with bible_commit. "
-                              "Do not merely return text without committing. Do not edit events directly, "
-                              "delete locks, archive operations, select variants, freeze canon, or run git. "
-                              "Do not start unrelated work or change platform configuration. "
-                              "If blocked, stop and explain; preserve the original operation ID. "
-                              "Use the CLI fallback for this exact workspace if MCP points elsewhere.\n\n"
-                              + short_ticket(self.service.workspace, Path(info["ticket_path"])))
+                    prompt = dispatch_prompt(self.service.workspace, info["ticket_path"], provider)
                     if conn:
                         version = conn.health()
                         conn.check_workspace()
@@ -246,9 +308,9 @@ class AgentRunner:
                             return
                         sid = conn.create(f"Story Bible · {info['project']} · {job_id[:8]}")
                         self._save(job, platform_session=sid, server_url=conn.url, server_version=version)
-                        args, stdin = command(provider, binary, self.service.workspace, prompt, conn, sid)
+                        args, stdin = command(provider, binary, self.service.workspace, prompt, conn, sid, model)
                     else:
-                        args, stdin = command(provider, binary, self.service.workspace, prompt)
+                        args, stdin = command(provider, binary, self.service.workspace, prompt, None, None, model, reasoning_effort)
                     env = os.environ.copy()
                     env.pop("CODEX_THREAD_ID", None)
                     env["PYTHONIOENCODING"] = "utf-8"

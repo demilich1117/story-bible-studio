@@ -2,7 +2,8 @@ import {AgentPanel} from './agent-panel.js';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const state = {token: '', projects: [], project: null, session: null, data: null, patch: {}, override: null, preview: null, scope: 'session', connections: {}, serial: 0, ticket: null, workspaceId: '', refreshSerial: 0};
-const storage = {get(k, fallback) {try {return JSON.parse(localStorage.getItem('diner:' + k)) ?? fallback;} catch {return fallback;}}, set(k, v) {try {localStorage.setItem('diner:' + k, JSON.stringify(v));} catch {}}};
+const unsavedStorage = new Map();
+const storage = {get(k, fallback) {if(unsavedStorage.has(k))return unsavedStorage.get(k);try {return JSON.parse(localStorage.getItem('diner:' + k)) ?? fallback;} catch {return fallback;}}, set(k, v) {try {localStorage.setItem('diner:' + k, JSON.stringify(v));unsavedStorage.delete(k);return true;} catch {unsavedStorage.set(k,v);$('#storage-warning').hidden=false;return false;}}};
 let writing=false;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, x => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[x]));
 const sessionKey = (project,session) => JSON.stringify([state.workspaceId,project,session]);
@@ -31,10 +32,10 @@ function option(value, label) {const el=document.createElement('option'); el.val
 function requireSession() {if (!state.data) throw new Error('先选一张会话卡座。');}
 
 function renderSessions() {
-  const query=$('#session-search').value.toLocaleLowerCase();
+  const query=$('#session-search').value.trim().toLocaleLowerCase();
   const sessions=(state.project?.sessions || []).filter(s=>s.id.toLocaleLowerCase().includes(query));
   $('#session-list').replaceChildren();
-  if (!sessions.length) {$('#session-list').innerHTML='<p class="muted small">这里还没有会话。<br>新开一张卡座吧。</p>';return;}
+  if (!sessions.length) {$('#session-list').innerHTML=query?'<p class="muted small" role="status">没有匹配的会话。试试其他名称，或清空搜索。</p>':'<p class="muted small">这里还没有会话。<br>新开一张卡座吧。</p>';return;}
   for (const s of sessions) {
     const button=document.createElement('button'); button.className='session-item' + (state.session===s.id?' active':'');
     button.setAttribute('aria-current',state.session===s.id?'true':'false');
@@ -43,19 +44,24 @@ function renderSessions() {
     button.append(title,sub); button.onclick=task(()=>selectSession(s.id)); $('#session-list').append(button);
   }
 }
-async function loadProject(id, restore=true) {
+async function loadProject(id, restore=true, navigation={}) {
   if (hasUnsaved() && !window.confirm('有尚未保存的设置或创作要求，放弃这些改动并切换作品？')) {$('#project-select').value=state.project?.id||'';return;}
   saveDraft(); const serial=++state.serial; const p=await api('project',{project:id}); if(serial!==state.serial)return;
   state.project=p; state.session=null; state.data=null; state.patch={}; state.override=null; state.preview=null;state.ticket=null;
   state.reqDirty=false;state.requirementsBase=null;state.requirementsDraft=[];state.recoveryOptions=null;renderRequirements();
-  storage.set('project:'+state.workspaceId,id); $('#project-select').value=id; renderSessions(); renderConfig();
+  storage.set('project:'+state.workspaceId,id); $('#project-select').value=id; $('#session-search').value='';renderSessions(); renderConfig();
   $('#session-view').hidden=true; $('#composer').hidden=true; $('#welcome').hidden=false;
   const previous=storage.get(lastSessionKey(id),state.legacyStorage?storage.get(`session:${id}`,null):null);
-  if (restore && previous && p.sessions.some(s=>s.id===previous)) await selectSession(previous);
+  if (restore && previous && p.sessions.some(s=>s.id===previous)) await selectSession(previous,navigation);
+  else if(navigation.mode!=='none')syncRoute(navigation.mode||'push');
+  return true;
 }
 function saveDraft() {
   if(!state.session)return;
-  storage.set('draft:'+key(),$('#user-input').value);
+  const saved=storage.set('draft:'+key(),$('#user-input').value);
+  $('#draft-hint').textContent=saved?'草稿已保存在此浏览器':'草稿尚未保存，请复制备份';
+  const route=new URL(location.href).searchParams;
+  if(route.get('project')===state.project?.id&&route.get('session')===state.session)history.replaceState({...history.state,position:readingPosition()},'');
   storage.set('position:'+key(),readingPosition());
   storage.set('override:'+key(),state.override);
   storage.set('ticket:'+key(),state.ticket);
@@ -84,7 +90,7 @@ async function sessionRange(project,session,first,serial){
   }
   return data;
 }
-async function selectSession(id) {
+async function selectSession(id, navigation={}) {
   if (hasUnsaved() && !window.confirm('有尚未保存的设置或创作要求，放弃这些改动并切换会话？')) return;
   saveDraft(); const project=state.project.id, serial=++state.serial;
   const newKey=sessionKey(project,id);
@@ -94,9 +100,9 @@ async function selectSession(id) {
     storage.set('position:'+newKey,storage.get('position:'+newKey,{scrollY:storage.get('scroll:'+legacy,0)}));
     storage.set('migrated:'+newKey,true);
   }
-  const position=storage.get('position:'+sessionKey(project,id),null);
+  const position=navigation.position||storage.get('position:'+sessionKey(project,id),null);
   let data;
-  try{data=await sessionRange(project,id,position?.first||position?.turn,serial);}catch(error){
+  try{data=await sessionRange(project,id,navigation.turn||position?.first||position?.turn,serial);}catch(error){
     if(serial!==state.serial)return;
     const diagnostic=await api('session_diagnostic',{project,session:id});if(serial!==state.serial)return;
     state.session=id;state.data=null;state.patch={};state.reqDirty=false;state.requirementsBase=null;state.requirementsDraft=[];
@@ -115,10 +121,34 @@ async function selectSession(id) {
   if(state.override){state.preview=await api('preview',{project,session:id,override:state.override},true);if(serial!==state.serial)return;}
   storage.set(lastSessionKey(project),id);$('#user-input').value=storage.get('draft:'+key(),'');
   $('#welcome').hidden=true;$('#session-view').hidden=false;$('#composer').hidden=false;
+  state.returnPosition=null;$('#return-to-reading').hidden=true;
   closeDrawers();renderSessions();renderSession();renderConfig();
-  requestAnimationFrame(()=>{if(serial===state.serial)restorePosition(position||{scrollY:0});});
+  if(navigation.mode!=='none')syncRoute(navigation.mode||'push',navigation.turn);
+  await new Promise(resolve=>requestAnimationFrame(resolve));
+  if(serial!==state.serial)return;
+  if(navigation.turn)await jumpToTurn(navigation.turn,'none');else restorePosition(position||{scrollY:0});
   await refreshTicket(serial);
 }
+
+function syncRoute(mode='push',turn=null){
+  const params=new URLSearchParams();if(state.project)params.set('project',state.project.id);if(state.session)params.set('session',state.session);if(turn)params.set('turn',turn);
+  const url='/'+(params.size?'?'+params:'');
+  const method=mode==='replace'||url===location.pathname+location.search?'replaceState':'pushState';
+  history[method]({project:state.project?.id,session:state.session},'',url);
+}
+async function openRoute(position=null){
+  const params=new URL(location.href).searchParams,project=params.get('project');
+  if(!project)return;
+  if(!state.projects.some(p=>p.id===project))throw Error('链接中的作品不存在，请从左侧选择作品。');
+  const session=params.get('session'),raw=params.get('turn'),turn=raw===null?null:Number(raw);
+  if(raw!==null&&(!session||!Number.isSafeInteger(turn)||turn<1))throw Error('链接中的回合编号无效。');
+  const changed=await loadProject(project,false,{mode:'none'});if(!changed){syncRoute('replace');return;}
+  if(session){if(!state.project.sessions.some(s=>s.id===session))throw Error('链接中的会话不存在，请从左侧选择会话。');await selectSession(session,{mode:'none',turn,position});}
+}
+window.addEventListener('popstate',()=>task(async()=>{
+  if(!new URL(location.href).searchParams.has('project')){await loadProject(state.project?.id||state.projects[0]?.id,true,{mode:'replace'});return;}
+  await openRoute(history.state?.position);
+})());
 function inlineText(text) {
   const frag=document.createDocumentFragment();
   for(const part of text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g)) {
@@ -146,9 +176,10 @@ function turnElement(row) {
   const select=document.createElement('select');select.setAttribute('aria-label',`第 ${row.turn} 轮回复版本`);
   Object.keys(row.variants).forEach(v=>select.append(option(v,`${v}${v===row.selected?' · 当前':''}`)));select.value=row.selected;
   const copy=document.createElement('button');copy.textContent='复制';copy.onclick=task(()=>copyText(row.variants[select.value].prose));
+  const link=document.createElement('button');link.textContent='定位链接';link.onclick=task(()=>copyText(location.origin+'/?'+new URLSearchParams({project:state.project.id,session:state.session,turn:row.turn})));
   const choose=document.createElement('button');choose.textContent='采用此版';choose.hidden=true;
   choose.onclick=task(async()=>{await api('select',{project:state.project.id,session:state.session,turn:row.turn,variant:select.value,expected_version:state.data.version},true);await refreshSession();toast('已采用这个版本，场景与状态已同步。');});
-  controls.append(select,copy,choose);heading.append(label,controls);article.append(heading);
+  controls.append(select,copy,link,choose);heading.append(label,controls);article.append(heading);
   const content=document.createElement('div');article.append(content);
   function show(){content.replaceChildren();const v=row.variants[select.value];const preview=select.value!==row.selected;
     choose.hidden=!preview||row.turn!==state.data.current_turn;choose.disabled=state.data.pending;
@@ -172,6 +203,7 @@ function renderSession() {
   $('#regen-button').disabled=d.pending||!d.current_turn;
   $('#turn-jump').max=d.current_turn;$('#turn-jump').disabled=!d.current_turn;$('#jump-button').disabled=!d.current_turn;
   $('#turn-count').textContent=`/ ${d.current_turn} 轮`;
+  $('#turn-jump-form').hidden=!d.current_turn;
   updateOverride();
   renderTicket();
   renderRecovery();
@@ -187,6 +219,7 @@ async function refreshSession() {
 }
 function currentConfig(){return $('#scope').value==='project'?state.project?.config:$('#scope').value==='turn'&&state.preview?state.preview:state.data?.config;}
 function renderConfig(){
+  renderConfigSummary();
   const cfg=currentConfig(), turn=$('#scope').value==='turn', busy=state.data?.pending && !state.data?.can_configure && !($('#scope').value==='project');
   $('#config-fields').disabled=!cfg||!!busy;
   if(cfg){
@@ -205,6 +238,13 @@ function renderConfig(){
   if(state.project){state.project.styles.presets.forEach(p=>select.append(option(p.name,p.name)));if($('#scope').value!=='project')select.prepend(option('inherit','跟随当前项目文风'));select.value=target?.style?.value||'';}
   $('#mode-select').value=target?.mode||'quality';
   ['#save-style','#save-mode','#style-select','#mode-select'].forEach(s=>$(s).disabled=turn||!target||!!busy);
+}
+function renderConfigSummary(){
+  const effective=(state.preview||state.data?.config)?.effective,box=$('#effective-settings');box.replaceChildren();
+  if(!effective){$('#effective-scope').textContent='当前设置';box.textContent='选择会话后，在这里查看当前生效的设置。';return;}
+  const items=[['字数',effective.prose?.enabled===false?'不设目标':`${effective.prose?.min_chars??'不限'}—${effective.prose?.max_chars??'不限'} 字`],['人称',({first:'第一人称',second:'第二人称',third:'第三人称'})[effective.person]||'沿用'],['扮演',({'co-narrative':'共同叙事','user-driven':'用户主导','short-rp':'不新增用户言行'})[effective.agency]||'沿用'],['状态栏',effective.status_bar?.enabled?'显示':'隐藏']];
+  for(const [label,value] of items){const row=document.createElement('div'),name=document.createElement('dt'),text=document.createElement('dd');name.textContent=label;text.textContent=value;row.append(name,text);box.append(row);}
+  $('#effective-scope').textContent=state.override?'已附本轮覆盖 · 下一张小票生效':'本会话当前生效';
 }
 function updateOverride(){const note=$('#override-note');note.hidden=!state.override;note.textContent='本轮菜单已附上 · 成功保存交接小票后，下一张恢复持续设置。';}
 function renderTicket(){
@@ -245,9 +285,12 @@ async function handoff(kind){requireSession();agentPanel.check();if(hasUnsaved()
 
 $('#project-select').onchange=task(e=>loadProject(e.target.value));$('#session-search').oninput=renderSessions;
 $('#back-to-top').onclick=()=>window.scrollTo({top:0,behavior:'instant'});
-$('#turn-jump-form').onsubmit=task(async e=>{
-  e.preventDefault();requireSession();
-  const target=Number($('#turn-jump').value),data=state.data,serial=state.serial;
+$('#write-reply').onclick=()=>{if(!state.returnPosition)state.returnPosition=readingPosition();$('#return-to-reading').hidden=false;$('#composer').scrollIntoView({block:'start',behavior:'instant'});$('#user-input').focus({preventScroll:true});};
+$('#return-to-reading').onclick=()=>{restorePosition(state.returnPosition);state.returnPosition=null;$('#return-to-reading').hidden=true;$('#write-reply').focus({preventScroll:true});};
+$('#copy-session-link').onclick=task(()=>copyText(location.origin+'/?'+new URLSearchParams({project:state.project.id,session:state.session})));
+$('#turn-jump-form').onsubmit=task(async e=>{e.preventDefault();await jumpToTurn(Number($('#turn-jump').value));});
+async function jumpToTurn(target,mode='push'){
+  requireSession();const data=state.data,serial=state.serial;
   if(!Number.isInteger(target)||target<1||target>data.current_turn)throw new Error('请输入已有的回合编号。');
   const project=state.project.id,session=state.session,rows=[...data.turns];let hasOlder=data.has_older;
   $('#jump-button').disabled=true;$('#jump-button').textContent='定位中…';
@@ -263,10 +306,11 @@ $('#turn-jump-form').onsubmit=task(async e=>{
     if(serial!==state.serial||state.data!==data)return;
     if(!rows.some(row=>row.turn===target))throw new Error('没有找到这一轮。');
     if(rows.length!==data.turns.length){data.turns=rows;data.has_older=hasOlder;renderSession();}
+    saveDraft();if(mode!=='none')syncRoute(mode,target);
     const article=$(`[data-turn="${target}"]`);article.tabIndex=-1;
     article.focus({preventScroll:true});article.scrollIntoView({block:'start',behavior:'instant'});saveDraft();
   }finally{$('#jump-button').disabled=!state.data?.current_turn;$('#jump-button').textContent='跳转';}
-});
+}
 $('#new-content').onclick=task(async()=>{if(dirty()){if(!window.confirm('更新后需要重新核对设置，放弃未保存的菜单改动？'))return;state.patch={};}await refreshSession();});
 $('#load-older').onclick=task(async()=>{const project=state.project.id,session=state.session,serial=state.serial;const oldest=state.data.turns[0]?.turn;if(!oldest)return;const older=await api('snapshot',{project,session,before:oldest});if(serial!==state.serial)return;if(older.version!==state.data.version){await refreshSession();return;}
   const anchor=$(`[data-turn="${oldest}"]`), beforeTop=anchor?.getBoundingClientRect().top||0;state.data.turns=[...older.turns,...state.data.turns];state.data.has_older=older.has_older;renderSession();const afterTop=$(`[data-turn="${oldest}"]`)?.getBoundingClientRect().top||0;window.scrollBy(0,afterTop-beforeTop);
@@ -289,7 +333,7 @@ function toggleDrawer(panel,button){
 $('#sessions-button').onclick=()=>toggleDrawer('#sidebar','#sessions-button');
 $('#settings-button').onclick=()=>toggleDrawer('#settings','#settings-button');
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawers(true);});
-$('#user-input').oninput=()=>{saveDraft();$('#draft-hint').textContent='草稿已保存在此浏览器';};
+$('#user-input').oninput=saveDraft;
 window.addEventListener('beforeunload',saveDraft);
 $('#scope').onchange=()=>{if(dirty()&&!window.confirm('有尚未保存的改动，放弃后切换生效范围？')){$('#scope').value=state.scope;return;}state.scope=$('#scope').value;state.patch={};renderConfig();};
 $$('[data-key]').forEach(el=>{const record=()=>{
@@ -318,11 +362,14 @@ $('#checkpoint-button').onclick=task(()=>{requireSession();$('#bookmark-name').v
 $('#bookmark-form').onsubmit=task(async e=>{e.preventDefault();await api('checkpoint',{project:state.project.id,session:state.session,checkpoint_id:$('#bookmark-name').value.trim(),expected_version:state.data.version,through_turn:Number($('#bookmark-turn').value)},true);$('#bookmark-dialog').close();await refreshSession();toast('书签已保存。');});
 $('#branch-button').onclick=task(()=>{requireSession();const checkpoints=Object.entries(state.data.checkpoints);if(!checkpoints.length)throw new Error('先用“留个书签”创建一个检查点。');$('#branch-checkpoint').replaceChildren(...checkpoints.map(([id,c])=>option(id,`${id} · 第 ${c.through_turn} 轮`)));$('#branch-name').value='';$('#branch-dialog').showModal();});
 $('#branch-form').onsubmit=task(async e=>{e.preventDefault();const result=await api('branch',{project:state.project.id,session:state.session,checkpoint_id:$('#branch-checkpoint').value,new_session:$('#branch-name').value.trim(),expected_version:state.data.version},true);$('#branch-dialog').close();state.project=await api('project',{project:state.project.id});await selectSession(result.session);toast('故事分支已创建。');});
-$('#stop-button').onclick=task(async()=>{if(!window.confirm('关闭本地网页后台？不会关闭 Agent 或修改故事。'))return;await api('shutdown',{},true);$('#connection').textContent='CLOSED';clearInterval(pollTimer);toast('本地后台已关闭，可以关闭网页。');});
+$('#stop-button').onclick=task(async()=>{if(!window.confirm('关闭本地后台？将停止本工作台启动的生成任务，已保存的故事仍保留。'))return;await api('shutdown',{},true);$('#connection').textContent='CLOSED';clearInterval(pollTimer);toast('本地后台已关闭，可以关闭网页。');});
 
 const prefs=storage.get('reading',{theme:'light',font:'serif','font-size':18,'line-height':1.85,'read-width':760});
+prefs.theme=storage.get('theme',prefs.theme||storage.get('bible-theme','light'));
+storage.set('theme',prefs.theme);
 function applyPrefs(){document.documentElement.dataset.theme=prefs.theme;const style=document.documentElement.style;style.setProperty('--reading-size',prefs['font-size']+'px');style.setProperty('--reading-line',prefs['line-height']);style.setProperty('--reading-width',prefs['read-width']+'px');style.setProperty('--reading-font',prefs.font==='sans'?'"Segoe UI","Microsoft YaHei",sans-serif':'Georgia,"Songti SC","SimSun",serif');}
-for(const id of ['theme','font','font-size','line-height','read-width']){$('#'+id).value=prefs[id];$('#'+id).oninput=e=>{prefs[id]=e.target.value;applyPrefs();storage.set('reading',prefs);};}applyPrefs();
+for(const id of ['theme','font','font-size','line-height','read-width']){$('#'+id).value=prefs[id];$('#'+id).oninput=e=>{prefs[id]=e.target.value;applyPrefs();storage.set('reading',prefs);if(id==='theme')storage.set('theme',prefs.theme);};}applyPrefs();
+window.addEventListener('storage',event=>{if(event.key==='diner:theme'){prefs.theme=storage.get('theme','light');$('#theme').value=prefs.theme;applyPrefs();}});
 let polling=false;
 const pollTimer=setInterval(async()=>{if(document.hidden||!state.session||!state.data||polling||writing)return;polling=true;const serial=state.serial;
   try{const status=await api('status',{project:state.project.id,session:state.session});if(serial!==state.serial)return;$('#connection').textContent='OPEN · 本地';
@@ -348,7 +395,9 @@ async function boot(){
   state.projects=await api('projects');$('#project-select').replaceChildren(...state.projects.map(p=>option(p.id,p.name)));
   $('#connection').textContent='OPEN · 本地';
   if(!state.projects.length){$('#session-list').innerHTML='<p class="muted small">还没有作品。先在 Agent 中创建 Story Bible 项目。</p>';$('#new-session').disabled=true;return;}
-  const previous=storage.get('project:'+state.workspaceId,state.legacyStorage?storage.get('project',null):null);await loadProject(state.projects.some(p=>p.id===previous)?previous:state.projects[0].id);
+  history.scrollRestoration='manual';
+  if(new URL(location.href).searchParams.has('project')){try{await openRoute(history.state?.position);}catch(error){toast(error.message);}return;}
+  const previous=storage.get('project:'+state.workspaceId,state.legacyStorage?storage.get('project',null):null);await loadProject(state.projects.some(p=>p.id===previous)?previous:state.projects[0].id,true,{mode:'replace'});
 }
 function requirementsHint(){
   const req=state.requirementsBase;
@@ -452,6 +501,6 @@ $('#restore-composer-backup').onclick=task(async()=>{
   const backup=storage.get('composer-backup:'+key(),null);if(!backup)return;
   await restoreRecovery({...(backup.recoveryOptions||{kind:'continue'}),user_text:backup.text,override:backup.override});
 });
-window.addEventListener('beforeunload',event=>{if(hasUnsaved()){event.preventDefault();event.returnValue='';}});
+window.addEventListener('beforeunload',event=>{if(hasUnsaved()||unsavedStorage.size){event.preventDefault();event.returnValue='';}});
 const agentPanel=new AgentPanel(api,()=>[state.workspaceId,'session',state.project?.id,state.session],()=>refreshSession());
 task(async()=>{await boot();await agentPanel.init();})();
