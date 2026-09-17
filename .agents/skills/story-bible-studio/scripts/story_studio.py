@@ -43,7 +43,7 @@ from studio_policy import set_config, set_mode, config_view
 from studio_versions import upgrade_bible
 from studio_validate_v3 import validate
 from studio_styles import list_styles, show_style, set_style, style_dependency
-from studio_core import load_yaml
+from studio_core import load_yaml, load_project_config
 
 
 def text_file(path: str) -> str:
@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     style_sub.add_parser("list")
     for action in ("show", "set"):
         command = style_sub.add_parser(action)
-        command.add_argument("--project", required=True)
+        command.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
         command.add_argument("--session")
         if action == "show":
             command.add_argument("--style-file", help="本次/单篇覆盖 YAML 或 JSON")
@@ -105,26 +105,26 @@ def build_parser() -> argparse.ArgumentParser:
     bible = groups.add_parser("bible", help="Story Bible 构筑审计与冻结")
     bible_sub = bible.add_subparsers(dest="action", required=True)
     bible_audit = bible_sub.add_parser("audit")
-    bible_audit.add_argument("--project", required=True)
+    bible_audit.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     bible_audit.add_argument("--for-finalize", action="store_true")
     bible_finalize = bible_sub.add_parser("finalize")
-    bible_finalize.add_argument("--project", required=True)
+    bible_finalize.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     bible_finalize.add_argument("--apply", action="store_true")
     bible_prepare = bible_sub.add_parser("prepare")
-    bible_prepare.add_argument("--project", required=True)
+    bible_prepare.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     bible_prepare.add_argument("--module", required=True, help="相对 StoryBible 的 Markdown 路径")
     bible_prepare.add_argument("--options", help="编号到文字结论的 JSON 映射")
     bible_prepare.add_argument("--related", action="append", default=[])
     bible_prepare.add_argument("--mode", choices=("quality", "economy"))
     bible_commit = bible_sub.add_parser("commit")
-    bible_commit.add_argument("--project", required=True)
+    bible_commit.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     bible_commit.add_argument("--payload", required=True)
     bible_revise = bible_sub.add_parser("revise")
-    bible_revise.add_argument("--project", required=True)
+    bible_revise.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     bible_revise.add_argument("--module")
 
     bible_operation = bible_sub.add_parser("operation")
-    bible_operation.add_argument("--project", required=True)
+    bible_operation.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     bible_operation.add_argument("--action", choices=("show", "resume", "archive"), default="show")
     bible_operation.add_argument("--operation-id")
     bible_operation.add_argument("--reason")
@@ -132,28 +132,28 @@ def build_parser() -> argparse.ArgumentParser:
     profile = groups.add_parser("profile", help="项目内 User Profile")
     profile_sub = profile.add_subparsers(dest="action", required=True)
     profile_import = profile_sub.add_parser("import")
-    profile_import.add_argument("--project", required=True)
+    profile_import.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     profile_import.add_argument("--payload", required=True)
     profile_import.add_argument("--source")
     profile_apply = profile_sub.add_parser("apply")
-    profile_apply.add_argument("--project", required=True)
+    profile_apply.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     profile_apply.add_argument("--id", required=True)
     profile_apply.add_argument("--revision", required=True)
     profile_list = profile_sub.add_parser("list")
-    profile_list.add_argument("--project", required=True)
+    profile_list.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     profile_show = profile_sub.add_parser("show")
-    profile_show.add_argument("--project", required=True)
+    profile_show.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     profile_show.add_argument("--id", required=True)
     profile_show.add_argument("--revision")
     profile_validate = profile_sub.add_parser("validate")
-    profile_validate.add_argument("--project", required=True)
+    profile_validate.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     profile_validate.add_argument("--id", required=True)
     profile_voice_set = profile_sub.add_parser("voice-set")
-    profile_voice_set.add_argument("--project", required=True)
+    profile_voice_set.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     profile_voice_set.add_argument("--id", required=True)
     profile_voice_set.add_argument("--file", required=True)
     profile_openings = profile_sub.add_parser("openings")
-    profile_openings.add_argument("--project", required=True)
+    profile_openings.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     profile_openings.add_argument("--id", required=True)
     profile_openings.add_argument("--revision")
 
@@ -171,11 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
     session_upgrade.add_argument("--apply", action="store_true")
     session_upgrade.add_argument("--resolution")
     mode_set = groups.add_parser("mode", help="显式应用整套质量/节省预设")
-    mode_set.add_argument("--project", required=True)
+    mode_set.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     mode_set.add_argument("--session")
     mode_set.add_argument("--set", required=True, choices=("quality", "economy"))
     config_set = groups.add_parser("config", help="即时修改写作配置；项目级写入 session_defaults")
-    config_set.add_argument("--project", required=True)
+    config_set.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     config_set.add_argument("--session")
     config_set.add_argument("--writing", action="store_true", help="正式创作默认，不读取 RP 会话")
     config_set.add_argument("--config-file", help="仅查看本次/单篇覆盖 YAML 或 JSON")
@@ -270,9 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
     index = groups.add_parser("index", help="分块索引")
     index_sub = index.add_subparsers(dest="action", required=True)
     index_rebuild = index_sub.add_parser("rebuild")
-    index_rebuild.add_argument("--project", required=True)
+    index_rebuild.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     index_query = index_sub.add_parser("query")
-    index_query.add_argument("--project", required=True)
+    index_query.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     index_query.add_argument("--query", required=True)
     index_query.add_argument("--top-k", type=int, default=8)
     index_query.add_argument("--scope", choices=("canon", "story"), default="canon")
@@ -280,25 +280,27 @@ def build_parser() -> argparse.ArgumentParser:
     migrate = groups.add_parser("migrate", help="项目架构迁移")
     migrate_sub = migrate.add_subparsers(dest="action", required=True)
     migrate_project = migrate_sub.add_parser("project-v3")
-    migrate_project.add_argument("--project", required=True)
+    migrate_project.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     migrate_project.add_argument("--apply", action="store_true")
 
     validate_group = groups.add_parser("validate", help="结构和会话验证")
-    validate_group.add_argument("--project", required=True)
+    validate_group.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
 
     milestone = groups.add_parser("milestone", help="Git 里程碑")
-    milestone.add_argument("--project", required=True)
+    milestone.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     milestone.add_argument("--message", required=True)
     return parser
 
 
 def add_locator(parser: argparse.ArgumentParser, include_session: bool = True) -> None:
-    parser.add_argument("--project", required=True)
+    parser.add_argument("--project", required=True, metavar="PROJECT_PATH", help="项目根目录路径（相对当前目录或绝对路径），例如 作品/作品名；不是工作台作品 ID")
     if include_session:
         parser.add_argument("--session", required=True)
 
 
 def run(args: argparse.Namespace) -> object:
+    if getattr(args, "project", None):
+        load_project_config(Path(args.project), allow_legacy=True)
     if args.group == "ticket":
         from studio_workbench import StudioService
         return StudioService(Path(args.workspace)).ticket(args.file, args.context_delivery)

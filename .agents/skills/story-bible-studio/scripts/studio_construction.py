@@ -69,7 +69,8 @@ def dependencies(project, topic, names, legacy=False):
 
 
 def prepare_bible(project, module=None, options=None, mode=None, related=None, *, topic_id=None,
-                  user_text=None, prompt_id=None, history_ids=None, budget=None, request_id=None):
+                  user_text=None, prompt_id=None, history_ids=None, budget=None, request_id=None,
+                  required_related=None):
     project = Path(project).resolve()
     runtime = runtime_root(project)
     with session_lock(project), session_lock(runtime):
@@ -97,6 +98,7 @@ def prepare_bible(project, module=None, options=None, mode=None, related=None, *
         prompt = current_prompt(project, state, topic, prompt_id) if modern else None
         mapping = options_map(prompt["options"] if prompt else (options or {}))
         related = string_list(related or [], "关联模块")
+        required_related = string_list(required_related or [], "必需关联模块")
         history_ids = string_list(history_ids or [], "历史记录")
         if len(history_ids) > 3:
             raise StudioError("一次最多显式召回三条讨论")
@@ -106,6 +108,8 @@ def prepare_bible(project, module=None, options=None, mode=None, related=None, *
         seed = {"module": module, "topic_id": topic_id, "options": mapping, "mode": mode,
                 "related": related, "user_text": user_text, "prompt_id": prompt_id,
                 "history_ids": history_ids, "budget": limit, "request_id": request_id, "modern": modern}
+        if required_related:
+            seed["required_related"] = required_related
         active = read_json(runtime / "prepare.json")
         if active:
             if active.get("seed") == seed:
@@ -113,7 +117,11 @@ def prepare_bible(project, module=None, options=None, mode=None, related=None, *
                     raise StudioError("原构筑事务已过期，请保留草稿并归档后重新准备")
                 return active
             raise StudioError("已有准备中的构筑任务；请恢复原任务或显式归档，不得覆盖")
-        names = list(dict.fromkeys(["核心概念.md", module]))
+        names = list(dict.fromkeys(["核心概念.md", module, *required_related]))
+        missing = [name for name in required_related if not module_path(project, name).exists()]
+        if missing:
+            return {"status": "materials_blocked", "missing_required": missing,
+                    "message": "必需关联材料缺失；补齐材料或明确调整本轮范围后再准备。"}
         materials = {name: module_path(project, name).read_text(encoding="utf-8")
                      for name in names if module_path(project, name).exists()}
         history = []
@@ -130,6 +138,10 @@ def prepare_bible(project, module=None, options=None, mode=None, related=None, *
                                 "prompt": historical.get("prompt"), "summary": record["summary"]})
         packet = {"user_text": user_text, "topic": {k: deepcopy(v) for k, v in topic.items() if k not in {"draft", "source"}},
                   "prompt": prompt, "materials": materials, "history": history}
+        if topic.get("depends_on"):
+            packet["dependency_hints"] = [{"topic_id": tid, "module": state["topics"][tid]["module"],
+                "title": state["topics"][tid]["title"], "needs_review": tid in topic.get("needs_review", [])}
+                for tid in topic["depends_on"] if tid in state["topics"]]
         count = lambda: len(json.dumps(packet, ensure_ascii=False))
         omitted, used = [], list(names)
         for name in related:
@@ -215,6 +227,8 @@ def _pending_commit(project, request, payload, state):
             raise StudioError('冻结设定的累计事实需要先提出修订')
         from studio_construction_facts import update_facts
         topic['accepted_facts'] = update_facts(topic.get('accepted_facts', []), payload['accepted_facts'], request['operation_id'])
+    from studio_construction_chat import apply_fact_review
+    apply_fact_review(topic, payload, edits, request['operation_id'])
     if 'rejected_directions' in payload:
         topic['rejected_directions'] = string_list(payload['rejected_directions'], '明确否决方向')
     if prior_status in {"complete", "superseded"} and not edits:
@@ -232,15 +246,19 @@ def _pending_commit(project, request, payload, state):
             "edits": {rel: {"before": module_path(project, rel).read_text(encoding="utf-8")
                              if module_path(project, rel).exists() else None, "after": value} for rel, value in edits.items()}}
     next_prompt = payload.get("next_prompt")
+    from studio_construction_chat import next_topic
+    prompt_topic = next_topic(project, state, topic, payload.get("next_topic"), next_prompt)
     if next_prompt:
         if not isinstance(next_prompt, dict) or not isinstance(next_prompt.get("question"), str) or not next_prompt["question"].strip():
             raise StudioError("next_prompt 需要完整的 question 与 options")
         mapping = options_map(next_prompt.get("options", {}))
         pid = "prompt-" + request["operation_id"]
         data["prompt"] = {"id": pid, "question": next_prompt["question"], "options": mapping}
-        data["prompts"] = {pid: {"id": pid, "topic_id": topic["id"], "event_id": request["operation_id"],
+        data["prompts"] = {pid: {"id": pid, "topic_id": prompt_topic["id"], "event_id": request["operation_id"],
             "question": next_prompt["question"][:140], "options": {k: v[:160] for k, v in mapping.items()}, "selected": []}}
-        topic["prompt_id"] = pid
+        prompt_topic["prompt_id"] = pid
+    if prompt_topic is not topic:
+        topics[prompt_topic["id"]] = prompt_topic
     if request["prompt_id"] and keys:
         previous = deepcopy(state["prompts"][request["prompt_id"]])
         previous["selected"] = keys
@@ -253,7 +271,7 @@ def _pending_commit(project, request, payload, state):
         topics[source["id"]] = source
         for other in state["topics"].values():
             if source["id"] in other.get("depends_on", []) and other["id"] != topic["id"]:
-                changed = deepcopy(other)
+                changed = deepcopy(topics.get(other['id'], other))
                 changed["needs_review"] = list(dict.fromkeys(other.get("needs_review", []) + [source["id"]]))
                 changed["version"] = changed.get("version", 0) + 1
                 topics[changed["id"]] = changed
@@ -274,12 +292,15 @@ def _pending_commit(project, request, payload, state):
     topic["needs_review"] = [x for x in topic.get("needs_review", []) if x not in reviewed]
     topics[topic["id"]] = topic
     data["topics"] = topics
+    data["conversation"] = {"topic_id": prompt_topic["id"], "prompt_id": prompt_topic.get("prompt_id"),
+                            "operation_id": request["operation_id"]}
     module_status = status if not request["modern"] else "open"
     data["modules"] = {request["module"]: {"status": module_status, "decision": decision,
         "open_questions": topic["open_questions"], "intentional_blanks": topic["intentional_blanks"]}}
     receipt = {"status": "complete", "request_hash": digest(payload), "module": request["module"],
         "topic_id": topic["id"], "decision": decision, "module_status": module_status,
-        "request_id": request.get("request_id"), "prompt_id": topic.get("prompt_id")}
+        "request_id": request.get("request_id"), "prompt_id": prompt_topic.get("prompt_id"),
+        "next_topic_id": prompt_topic["id"]}
     data["operations"] = {request["operation_id"]: receipt}
     return {"operation_id": request["operation_id"], "request_hash": digest(payload), "payload": payload,
         "edits": edits, "before": {r: v["before"] for r, v in data["edits"].items()},

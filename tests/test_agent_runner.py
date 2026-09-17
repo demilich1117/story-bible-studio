@@ -181,13 +181,13 @@ class AgentRunnerTests(StudioCase):
         marker = "仅存在于小票中的用户原文-不要内联到启动提示词"
         ticket = self.ticket(marker)
         before = Path(ticket["ticket_path"]).read_bytes()
-        for provider in ("codex", "opencode", "opencode_server"):
+        for provider in ("codex", "opencode", "opencode_server", "antigravity"):
             prompt = dispatch_prompt(self.root, ticket["ticket_path"], provider)
             self.assertIn(ticket["instruction"], prompt)
             self.assertIn(str(ROOT / "workbench/agent-guide.md"), prompt)
             self.assertNotIn(marker, prompt)
             self.assertNotIn(ticket["full_instruction"], prompt)
-            self.assertLess(len(prompt) - len(ticket["instruction"]), 500)
+            self.assertLess(len(prompt) - len(ticket["instruction"]), 750 if provider == "antigravity" else 500)
         self.assertEqual(before, Path(ticket["ticket_path"]).read_bytes())
         self.assertEqual("waiting", self.service.bible_view(self.p, request_id=ticket["id"])["status"])
 
@@ -223,7 +223,7 @@ class AgentRunnerTests(StudioCase):
         result = subprocess.CompletedProcess([], 0, "Loading models\nvendor/b\nvendor/a\nvendor/b\n", "")
         with patch("agent_runner.executable", return_value="cli.exe"), patch("agent_runner.subprocess.run", return_value=result) as run:
             self.assertEqual(["vendor/a", "vendor/b"], [m["id"] for m in self.runner.models("opencode")["models"]])
-            self.assertEqual(["cli.exe", "models"], run.call_args.args[0])
+            self.assertEqual(["cli.exe", "models", "--verbose"], run.call_args.args[0])
             self.assertEqual(self.root, run.call_args.kwargs["cwd"])
             run.side_effect = subprocess.TimeoutExpired("models", 15)
             with self.assertRaisesRegex(StudioError, "超时"):
@@ -248,6 +248,7 @@ class AgentRunnerTests(StudioCase):
     def test_invalid_or_unsupported_reasoning_never_launches(self):
         req = self.ticket()
         self.runner.codex_catalog = {"models": [{"id": "small", "reasoning_efforts": ["low"]}]}
+        self.runner.opencode_catalogs = {name: {"models": []} for name in ("opencode", "opencode_server")}
         for provider, effort in (("codex", {}), ("codex", True), ("codex", "high --bad"),
                                  ("opencode", "high"), ("opencode_server", "high"), ("codex", "high")):
             with self.subTest(provider=provider, effort=effort), patch("agent_runner.executable") as binary:
@@ -328,6 +329,10 @@ class AgentRunnerTests(StudioCase):
 def fake_cli():
     workspace, path, mode, provider = sys.argv[2:]
     service = StudioService(Path(workspace), Path(workspace))
+    if provider == "antigravity" and mode in {"auth", "denied"}:
+        print("authentication required" if mode == "auth" else "tool soft-denied: permissions.allow", file=sys.stderr)
+        print(json.dumps({"event": "result", "result": {"conversation_id": "fake-agy", "status": "ERROR" if mode == "auth" else "SUCCESS", "response": ""}}))
+        sys.exit(1 if mode == "auth" else 0)
     if mode == "error":
         print(json.dumps({"type":"error", "message":"fake login required"}), flush=True)
         sys.exit(7)
@@ -343,7 +348,11 @@ def fake_cli():
                 "next_prompt":{"question":"先调查哪里？", "options":{"1":"河岸", "2":"钟楼"}}})
         else:
             service.commit(info["project"], info["session"], prepared["operation_id"], "米拉核对钟面。", regenerate=prepared.get("regenerate", False))
-    if provider == "codex":
+    if provider == "antigravity":
+        print(json.dumps({"event": "init", "conversation_id": "fake-agy", "init": {}}))
+        print(json.dumps({"event": "step_update", "step_update": {"conversation_id": "fake-agy", "step_type": "agent_response", "text_delta": "已经处理"}}))
+        print(json.dumps({"event": "result", "result": {"conversation_id": "fake-agy", "status": "SUCCESS", "response": "已经处理。"}}))
+    elif provider == "codex":
         print(json.dumps({"type":"thread.started", "thread_id":"fake-thread"}))
         print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":"河岸和钟楼都保留。"}}))
     else:

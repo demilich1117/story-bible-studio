@@ -12,7 +12,7 @@ ALLOWED_ROOT_FILES = {
     "安装MCP.ps1", "public-files.json", "启动OpenCode共享后台.cmd", "启动Codex工作台.cmd",
 }
 ALLOWED_TREES = (".agents/skills/story-bible-studio/", "workbench/", "tests/", "docs/", "tools/")
-ALLOWED_SUFFIXES = {".md", ".py", ".json", ".yaml", ".yml", ".txt", ".cmd", ".ps1", ".js", ".cjs", ".css", ".html", ".svg", ".gitignore"}
+ALLOWED_SUFFIXES = {".md", ".py", ".json", ".yaml", ".yml", ".txt", ".cmd", ".ps1", ".js", ".cjs", ".mjs", ".css", ".html", ".svg", ".gitignore"}
 FORBIDDEN_PARTS = {".git", "作品", "会话", "发布", "验收", "output", ".workbench", ".runtime", "__pycache__", "node_modules"}
 
 

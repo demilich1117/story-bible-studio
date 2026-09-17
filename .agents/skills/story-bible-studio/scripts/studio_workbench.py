@@ -13,7 +13,7 @@ from pathlib import Path
 from studio_core import (CONFIG_FILE, EVENT_FILE, StudioError, LockError, add_variant,
                          atomic_write_json, atomic_write_text, create_session,
                          read_events, reduce_events, session_lock, safe_name,
-                         load_yaml, project_events_through_turn, utc_now, normalize_motif_ids,
+                         load_yaml, load_project_config, project_events_through_turn, utc_now, normalize_motif_ids,
                          validate_state_updates, commit_contract)
 from studio_context import build_context, write_context
 from studio_policy import config_view
@@ -44,8 +44,7 @@ class StudioService(BibleWorkbench):
 
     def locate(self, project: str, session: str | None = None):
         p = self.child(self.projects_root, project)
-        if not (p / "项目配置.yaml").is_file():
-            raise StudioError("作品不存在")
+        load_project_config(p)
         if session is None:
             return p, None
         s = self.child(p / "会话", session)
@@ -636,7 +635,7 @@ class StudioService(BibleWorkbench):
         if operation in {'prepare', 'operation', 'ticket'}:
             params.setdefault('context_delivery', 'reference')
             return self.dispatch(operation, params)
-        if operation in {'memory', 'bible_prepare', 'bible_operation'}:
+        if operation in {'memory', 'bible_prepare', 'bible_revise_prepare', 'bible_operation'}:
             delivery = params.pop('context_delivery', 'reference')
             if delivery not in {'reference', 'inline'}:
                 raise StudioError('context_delivery 必须为 reference 或 inline')
@@ -655,7 +654,7 @@ class StudioService(BibleWorkbench):
         allowed = {"projects", "project", "openings", "snapshot", "status", "configure", "new_session", "select",
                    "checkpoint", "branch", "request", "prepare", "commit", "memory", "preview", "operation", "request_status",
                    "requirements", "requirements_view", "operation_view", "operation_edit", "recovery_ticket", "session_diagnostic",
-                   "bible_view", "bible_edit", "bible_prepare", "bible_commit", "bible_operation", "ticket", "recall"}
+                   "bible_view", "bible_edit", "bible_prepare", "bible_commit", "bible_operation", "bible_continue", "bible_revise_prepare", "ticket", "recall"}
         if operation not in allowed or not isinstance(params, dict):
             raise StudioError("未知操作或参数格式错误")
         return getattr(self, operation)(**params)

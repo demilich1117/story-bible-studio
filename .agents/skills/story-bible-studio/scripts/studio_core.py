@@ -224,6 +224,28 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return loaded
 
 
+def load_project_config(project: Path, *, allow_legacy: bool = False) -> dict[str, Any]:
+    """Validate project identity before interpreting its schema version."""
+    project = project.resolve()
+    if not project.is_dir():
+        raise StudioError(f"项目目录不存在或不是目录: {project}（直接 CLI 的 --project 需要项目根目录路径）")
+    path = project / "项目配置.yaml"
+    if not path.is_file():
+        raise StudioError(f"项目配置文件不存在或不是文件: {path}")
+    try:
+        config = load_yaml(path)
+    except (OSError, UnicodeError, yaml.YAMLError, StudioError) as exc:
+        raise StudioError(f"项目配置无法读取或格式损坏: {path}: {exc}") from exc
+    version = config.get("schema_version")
+    if type(version) is not int or version < 1:
+        raise StudioError(f"项目配置缺少有效的整数 schema_version: {path}；请核实配置，不自动推断为旧版")
+    if version > 3:
+        raise StudioError(f"不支持的项目 schema v{version}: {path}；当前程序支持至 v3，不能降级迁移")
+    if version < 3 and not allow_legacy:
+        raise StudioError(f"项目为 schema v{version}，需要先检查迁移到 schema v3: {project}")
+    return config
+
+
 def resolve_time_display(project_config: dict[str, Any], session_config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Resolve project defaults and an optional session-specific override."""
     resolved = dict(DEFAULT_TIME_DISPLAY)
@@ -612,9 +634,7 @@ def create_session(
 ) -> Path:
     session_id = safe_name(session_id)
     session = session_path(project, session_id)
-    project_config = load_yaml(project / "项目配置.yaml")
-    if int(project_config.get("schema_version", 0)) != 3:
-        raise StudioError("项目必须先迁移到 schema v3")
+    project_config = load_project_config(project)
     profile_revision = None
     opening = None
     if profile_id:

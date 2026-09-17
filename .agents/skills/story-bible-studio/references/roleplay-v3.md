@@ -4,7 +4,7 @@
 
 桌面自然语言、工作台与小票统一采用 [低消耗交付协议](low-cost-runtime.md)。不要求用户每轮提供小票或操作命令；由 Agent 把自然语言原文交给同一个核心。
 
-1. 有小票直接调用 ticket，一次即可。无小票时沿用当前对话已经明确的作品和会话；目标缺失或冲突只询问目标，不枚举目录、不猜工作台当前选择。新建会话按用户明确请求走 new_session，不把“继续”当新建。
+1. 有小票直接调用 ticket，一次即可。无小票时沿用当前对话已经明确的作品和会话；目标缺失或冲突只询问目标，不枚举目录、不猜工作台当前选择。新建会话按用户明确请求走下述 new_session 流程，不把“继续”当新建。
 2. 无小票且没有有效版本时，用 studio_status(project, session) 获取 version；已有有效版本可直接准备。用 studio_prepare(project, session, user_text=用户原文, expected_version=版本) 一次准备。普通“继续”不补人物名或 query；重生成明确传 regenerate=true，不作为新角色行动。若 status 显示待处理事务，先用 studio_operation 检查原任务，不自行覆盖或归档。
 3. 只有 ready 才按 context_parts 清单顺序读取全部分段一次；不读取整个 context-packet.md、不探测目录或旧事务。needs_compaction 按报告的 through_turn 调用 memory prepare，读完候选，主 Agent 审核后 memory apply，再以原输入、覆盖与任务类型恢复准备；这是状态要求的恢复，不是普通轮重复准备。budget_blocked/stale/damaged 按恢复协议处理，不猜测或裁掉必需材料。
 4. 依据包内有效规则做轻量检查并一次起草。只有纠正、漂移或复杂冲突才加载完整诊断。prose 只放正文，status 独立放显示状态栏，scene_patch 放场景字段，state_updates 按合法文件名提供改变文件的完整 Markdown。遵循收据 commit_contract，不为软字数计数、补写或反复修改。
@@ -23,6 +23,28 @@ status 参数为 `{"project":"实际作品","session":"实际会话"}`；prepare
 结构化 CLI 的 prepare／operation／memory 候选默认与 MCP 一样返回短收据和 context_parts；不需要先启动工作台服务器。内部 Python 调用与显式 context_delivery=inline 保留兼容。传统 turn prepare/commit 仅供明确要求使用的旧客户端，不作为桌面自然语言 RP 的默认入口。
 
 提交输入必须与 prepare 一致。状态栏时间服从 resolved_time_display，并与场景补丁一致。提交后再展示正文。
+
+### 新建会话与项目参数
+
+工作台／MCP 的 `project` 是 `作品/` 下的单个目录名，例如 `Eat Me, Chef`；直接 CLI 的 `--project` 是相对当前目录或绝对的**项目根目录路径**，例如 `作品/Eat Me, Chef`，不能传作品名代替路径，也不能传末尾的 `/会话`。用户给出 `作品/Eat Me, Chef/会话` 时，结构化接口使用 `project: "Eat Me, Chef"`。
+
+新建会话没有现成的会话 version。用指定作品的 `project` 操作获取项目 `version` 与 Profile 元数据，以 `profile_id` 绑定，不把显示名直接当 ID；用户给出的名称有多个匹配时才确认。此处只使用项目元数据，不读取返回的兄弟会话正文。按需用 `openings` 核对指定开场，不能把推荐开场当用户选择。
+
+无 MCP 时，所有步骤继续用 `workbench --operation <操作> --payload-file <参数.json>`，各次 payload 示例：
+
+```json
+{"project":"Eat Me, Chef"}
+```
+
+1. `project`：以上参数，取得项目 `version`、`profiles[].profile_id/display_name`。
+2. `openings`（需要核对开场时）：`{"project":"Eat Me, Chef","profile":"mara-finch"}`。
+3. `new_session`：`{"project":"Eat Me, Chef","session_id":"Mara-开场01","expected_version":"上一步取得的项目 version","profile":"mara-finch","opening":"opening-01"}`。
+4. `status`：`{"project":"Eat Me, Chef","session":"new_session 返回的 session"}`，取得新会话 version。
+5. `prepare`：使用该会话及其 version，`user_text` 保留用户首轮行动原文；之后按 context_parts 和 commit_contract 正常交付。
+
+示例中的作品、Profile、会话、开场和版本均替换成当前请求及接口返回值。已有会话仍直接 status → prepare；新建流程不作为每轮前置步骤。
+
+项目不存在、配置缺失／损坏、版本字段无效都不是迁移依据。先修正目标或诊断配置；路径修正后重新检查原操作的前提。只有明确的旧版或迁移报告列出的实际旧结构变更才进入迁移流程；`already_v3` 表示无需迁移，不添加记录或重写配置。
 
 ## 回合输出规范
 

@@ -75,6 +75,45 @@ def _relative(project: Path, path: Path) -> str:
     return path.relative_to(project).as_posix()
 
 
+def _story_scope_anchors(config: dict[str, Any], for_finalize: bool, errors: list[str]) -> list[str]:
+    scope = config.get("story_scope", {})
+    if not isinstance(scope, dict):
+        if for_finalize:
+            errors.append("story_scope 必须是包含 mode 与 anchors 的映射")
+        return []
+
+    raw = scope.get("anchors", [])
+    if not isinstance(raw, list):
+        if for_finalize:
+            errors.append("story_scope.anchors 必须是角色文件 ID 组成的列表")
+        return []
+
+    anchors: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+            or value in {".", ".."}
+            or any(char in value for char in "/\\:")
+        ):
+            if for_finalize:
+                errors.append(f"非法 story_scope 锚点：{value!r}；应填写不含路径分隔符的角色文件 ID")
+            continue
+        key = value.casefold()
+        if key in seen:
+            if for_finalize:
+                errors.append(f"story_scope.anchors 含重复角色 ID：{value}")
+            continue
+        seen.add(key)
+        anchors.append(value)
+
+    if for_finalize and scope.get("mode") == "character-hub" and not anchors:
+        errors.append("character-hub 项目至少需要一个 story_scope.anchors 锚点角色")
+    return anchors
+
+
 def _duplicate_warnings(project: Path, files: list[Path]) -> list[str]:
     occurrences: dict[str, list[str]] = defaultdict(list)
     for path in files:
@@ -111,16 +150,31 @@ def audit_bible(project: Path, for_finalize: bool = False) -> dict[str, Any]:
         elif for_finalize and not _body_after_title(path.read_text(encoding="utf-8")):
             errors.append(f"StoryBible/{filename} 仍为空骨架")
 
-    scope = config.get("story_scope", {})
-    for anchor in scope.get("anchors", []) if isinstance(scope, dict) else []:
+    anchors = _story_scope_anchors(config, for_finalize, errors)
+    character_root = project / "StoryBible" / "角色"
+    voice_root = project / "StoryBible" / "语料"
+    for anchor in anchors:
         character = project / "StoryBible" / "角色" / f"{anchor}.md"
         if for_finalize and not character.exists():
             errors.append(f"锚点角色缺少档案：StoryBible/角色/{anchor}.md")
+        elif for_finalize and not _body_after_title(character.read_text(encoding="utf-8")):
+            errors.append(f"锚点角色档案仍为空骨架：StoryBible/角色/{anchor}.md")
         voice = project / "StoryBible" / "语料" / f"{anchor}.md"
         if for_finalize and not voice.exists():
             errors.append(f"锚点角色缺少完整声线文件：StoryBible/语料/{anchor}.md")
 
-    voice_root = project / "StoryBible" / "语料"
+    character_files = {path.stem: path for path in sorted(character_root.glob("*.md"))} if character_root.exists() else {}
+    voice_files = {path.stem: path for path in sorted(voice_root.glob("*.md"))} if voice_root.exists() else {}
+    if for_finalize:
+        for name, character in character_files.items():
+            if not _body_after_title(character.read_text(encoding="utf-8")):
+                errors.append(f"角色档案仍为空骨架：{_relative(project, character)}")
+            if name not in voice_files and name not in anchors:
+                warnings.append(f"角色 {name} 有档案但无同名语料；若会作为主要出场人物，应补齐 StoryBible/语料/{name}.md")
+        for name, voice in voice_files.items():
+            if name not in character_files:
+                errors.append(f"孤立语料缺少同名角色档案：{_relative(project, voice)}")
+
     if for_finalize and voice_root.exists():
         for voice in sorted(voice_root.glob("*.md")):
             errors.extend(voice_errors(voice.read_text(encoding="utf-8"), _relative(project, voice)))
@@ -175,6 +229,11 @@ def audit_bible(project: Path, for_finalize: bool = False) -> dict[str, Any]:
         construction_text = construction.read_text(encoding="utf-8")
         if f"阶段：{expected_label}" not in construction_text:
             errors.append(f"构筑/构筑状态.md 与 bible_status={bible_status} 不同步")
+        if for_finalize and bible_status == "frozen":
+            open_topics = re.findall(r"(?m)^##\s+(.+?)\s*[｜|]\s*open\s*$", construction_text)
+            if open_topics:
+                preview = "、".join(open_topics[:8]) + ("……" if len(open_topics) > 8 else "")
+                warnings.append(f"Story Bible 已冻结，但构筑台账仍有 open 主题：{preview}；应确认采用、搁置或继续修订")
 
     return {
         "status": "blocked" if errors else ("needs-review" if warnings else "ready"),
@@ -213,9 +272,9 @@ def finalize_bible(project: Path, apply: bool = False) -> dict[str, Any]:
         raise StudioError("有准备中的构筑讨论，请先完成或显式归档")
     blocking = [t["title"] for t in read_ledger(project).get("topics", {}).values()
                 if t.get("status") not in {"parked", "superseded"}
-                and (t.get("needs_review") or (t.get("revises") and t.get("status") != "complete"))]
+                and (t.get("needs_review") or t.get('pending_fact_ids') or (t.get("revises") and t.get("status") != "complete"))]
     if blocking:
-        raise StudioError("修订或关联影响尚未处理：" + "、".join(blocking))
+        raise StudioError("修订、事实落实或关联影响尚未处理：" + "、".join(blocking))
     before_errors = validate(project)
     if before_errors:
         raise StudioError("冻结前结构验证失败：\n- " + "\n- ".join(before_errors))

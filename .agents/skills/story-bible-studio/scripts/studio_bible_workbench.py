@@ -42,6 +42,69 @@ def compact_prepared(result):
 
 
 class BibleWorkbench:
+    def bible_continue(self, project, topic_id=None):
+        """Read a bounded chat handoff, never the panel selection or RP state."""
+        p, _ = self.locate(project)
+        with session_lock(p):
+            active = read_json(confined(p, '.runtime/bible/pending.json')) or read_json(confined(p, '.runtime/bible/prepare.json'))
+            if active:
+                recovered = operation_bible(p, operation_id=active['operation_id'])
+                return {'status': 'recovery_required', 'operation_id': active['operation_id'],
+                        'operation_status': recovered['status'], 'next': '通过 bible_operation 恢复原操作。'}
+            state = read_state(p)
+            cursor = state.get('conversation', {})
+            selected = topic_id or cursor.get('topic_id')
+            topic = state['topics'].get(selected)
+            if topic_id and not topic:
+                raise StudioError('主题不存在')
+            if not topic_id and topic and topic['status'] in {'superseded', 'parked'}:
+                topic = None
+            if not topic:
+                candidates = [t for t in state['topics'].values() if t['status'] in {'open', 'proposal'}]
+                if len(candidates) == 1:
+                    topic = candidates[0]
+                else:
+                    return {'status': 'needs_topic' if candidates else 'idle', 'project': project,
+                            'candidates': [{k: t[k] for k in ('id', 'title', 'module', 'status')} for t in candidates[:12]],
+                            'candidate_count': len(candidates)}
+            return {'status': 'ready' if topic['status'] in {'open', 'proposal'} else topic['status'],
+                    'project': project, 'topic_id': topic['id'], 'topic_version': topic['version'],
+                    'title': topic['title'], 'module': topic['module'], 'decision': topic.get('decision', '')[:600],
+                    'prompt': current_prompt(p, state, topic),
+                    'open_questions': topic.get('open_questions', []),
+                    'pending_fact_ids': topic.get('pending_fact_ids', []),
+                    'dependency_hints': [{k: state['topics'][tid][k] for k in ('id', 'title', 'module')}
+                                         for tid in topic.get('depends_on', []) if tid in state['topics']],
+                    'needs_review': topic.get('needs_review', []), 'replaced_by': topic.get('replaced_by')}
+
+    def bible_revise_prepare(self, project, topic_id, user_text, expected_version,
+                             related=None, history_ids=None, budget=None, required_related=None):
+        """Prepare an explicit chat revision without generating a handoff ticket."""
+        p, _ = self.locate(project)
+        with session_lock(p):
+            if not isinstance(user_text, str) or not user_text.strip():
+                raise StudioError('请保留本轮用户修订原文')
+            key = digest({'topic_id': topic_id, 'version': expected_version, 'text': user_text})
+            state = read_state(p)
+            revision = next((t for t in state['topics'].values() if t.get('chat_revision_key') == key), None)
+            if not revision:
+                if read_json(confined(p, '.runtime/bible/pending.json')) or read_json(confined(p, '.runtime/bible/prepare.json')):
+                    raise StudioError('已有构筑任务，请先恢复原操作')
+                revision = self.bible_edit(project, 'revise', topic_id=topic_id,
+                    expected_version=expected_version, text=user_text)['topic']
+            else:
+                active = read_json(confined(p, '.runtime/bible/prepare.json'))
+                if (active and active.get('topic_id') == revision['id']
+                        and active.get('seed', {}).get('user_text') == user_text
+                        and read_json(confined(p, '.runtime/bible/pending.json'))):
+                    return compact_prepared(operation_bible(p, operation_id=active['operation_id']))
+                done = next(((oid, op) for oid, op in state['operations'].items()
+                             if op.get('topic_id') == revision['id'] and op.get('status') == 'complete'), None)
+                if done:
+                    return {**done[1], 'status': 'committed', 'operation_id': done[0]}
+            return self.bible_prepare(project, revision['id'], user_text, related=related,
+                history_ids=history_ids, budget=budget, required_related=required_related)
+
     def bible_version(self, p):
         paths = [confined(p, "构筑/events.jsonl"), confined(p, "构筑/decisions.json"), p / "项目配置.yaml",
                  confined(p, ".runtime/bible/prepare.json"), confined(p, ".runtime/bible/pending.json")]
@@ -93,7 +156,7 @@ class BibleWorkbench:
 
     def bible_edit(self, project, action, topic_id=None, expected_version=None, title=None,
                    module=None, text="", kind="continue", prompt_id=None, related=None,
-                   history_ids=None, budget=None, operation_id=None):
+                   history_ids=None, budget=None, operation_id=None, required_related=None):
         p, _ = self.locate(project)
         runtime = runtime_root(p)
         with session_lock(p), session_lock(runtime):
@@ -106,7 +169,7 @@ class BibleWorkbench:
             if not isinstance(text, str):
                 raise StudioError("内容必须是文字")
             pending_commit = read_json(runtime / "pending.json")
-            if pending_commit and topic_id in pending_commit["event"]["data"].get("topics", {}) and action in {"draft", "park", "request"}:
+            if pending_commit and topic_id in pending_commit["event"]["data"].get("topics", {}) and action in {"draft", "park", "request", "revise"}:
                 raise StudioError("此主题有提交待恢复，请先完成原提交；新输入仍可保留在草稿框")
             if action == "recovery":
                 active = read_json(runtime / "pending.json") or read_json(runtime / "prepare.json")
@@ -116,7 +179,7 @@ class BibleWorkbench:
                 return self._bible_ticket(p, project, {"ticket_type": "bible-recovery", "operation_id": identifier(oid)})
             if action == "archive":
                 return operation_bible(p, "archive", operation_id, text)
-            if action not in {"create", "draft", "park", "request"}:
+            if action not in {"create", "draft", "park", "request", "revise"}:
                 raise StudioError("未知构筑编辑操作")
             if action == "create":
                 if not isinstance(title, str) or not title.strip() or len(title) > 120:
@@ -133,7 +196,9 @@ class BibleWorkbench:
                     topic.update(draft=text, decision=text)
                 else:
                     topic["status"] = "parked"
-            elif action == "request":
+            elif action in {"request", "revise"}:
+                if action == 'revise':
+                    kind = 'revise'
                 if not topic or not text.strip() or kind not in {"continue", "revise"}:
                     raise StudioError("请选择主题并填写继续讨论或修订要求")
                 if kind == "revise":
@@ -149,25 +214,29 @@ class BibleWorkbench:
                         "revises": topic["id"], "revises_version": topic.get("version", 0), "origin_topic_id": origin,
                         "version": 1, "depends_on": topic.get("depends_on", []), "needs_review": topic.get("needs_review", []),
                         "accepted_facts": deepcopy(topic.get('accepted_facts', [])),
+                        "fact_application_tracking": topic.get('fact_application_tracking', False),
+                        "pending_fact_ids": deepcopy(topic.get('pending_fact_ids', [])),
                         "rejected_directions": deepcopy(topic.get('rejected_directions', [])),
                         "source": "workbench", "open_questions": [], "intentional_blanks": topic.get("intentional_blanks", [])}
                     prompt_id = None
+                    if action == 'revise':
+                        topic['chat_revision_key'] = digest({'topic_id': topic_id, 'version': expected_version, 'text': text})
                 else:
                     current_prompt(p, state, topic, prompt_id)
                 if kind == "continue":
                     return self._bible_ticket(p, project, {"ticket_type": "bible", "topic_id": topic["id"],
                         "topic_version": topic.get("version", 0), "user_text": text, "prompt_id": topic.get("prompt_id"),
-                        "related": related, "history_ids": history_ids, "budget": budget,
+                        "related": related, "required_related": required_related, "history_ids": history_ids, "budget": budget,
                         "canon_signature": digest(canon_payload(p))})
             initialize(p)
-            event = make_event("revision_request" if action == "request" else action,
+            event = make_event("revision_request" if action in {"request", "revise"} else action,
                 {"topics": {topic["id"]: topic}, "record": {"topic_id": topic["id"], "summary": text[:180],
                  "status": topic["status"]}, "transcript": {"user": text, "assistant": None}}, uuid.uuid4().hex)
             append_event(p, event)
             if action == "request":
                 return self._bible_ticket(p, project, {"ticket_type": "bible", "topic_id": topic["id"],
                     "topic_version": topic["version"], "user_text": text, "prompt_id": None,
-                    "related": related, "history_ids": history_ids, "budget": budget,
+                    "related": related, "required_related": required_related, "history_ids": history_ids, "budget": budget,
                     "canon_signature": digest(canon_payload(p))})
             return {"status": "saved", "topic": topic, "version": self.bible_version(p)}
 
@@ -182,7 +251,7 @@ class BibleWorkbench:
         return ticket_result(self.workspace, path, full, id=rid, topic_id=payload.get("topic_id"), status="waiting")
 
     def bible_prepare(self, project, topic_id=None, user_text=None, request_id=None, prompt_id=None,
-                      related=None, history_ids=None, budget=None):
+                      related=None, history_ids=None, budget=None, required_related=None):
         p, _ = self.locate(project)
         with session_lock(p):
             req = None
@@ -198,9 +267,11 @@ class BibleWorkbench:
                     raise StudioError("构筑小票已过期，请刷新并重新发起；不替换旧任务")
                 topic_id, user_text, prompt_id = req["topic_id"], req["user_text"], req.get("prompt_id")
                 related, history_ids = req.get("related"), req.get("history_ids")
+                required_related = req.get('required_related')
                 budget = budget if budget is not None else req.get("budget")
             result = prepare_bible(p, topic_id=topic_id, user_text=user_text, prompt_id=prompt_id,
-                                   related=related, history_ids=history_ids, budget=budget, request_id=request_id)
+                                   related=related, history_ids=history_ids, budget=budget, request_id=request_id,
+                                   required_related=required_related)
             if req and result["status"] == "ready":
                 req["operation_id"] = result["operation_id"]
                 atomic_write_json(path, req)

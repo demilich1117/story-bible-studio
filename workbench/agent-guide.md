@@ -8,7 +8,15 @@
 
 ## 接手与提交
 
+### 无小票的桌面自然语言构筑
+
+目标作品明确但主题未知或上下文刚恢复时，用 studio_bible_continue 获取聊天接续位置；已知主题直接 studio_bible_prepare。没有 MCP 使用 CLI workbench 的 bible_continue／bible_prepare，同样不需要启动服务器或生成小票。接续收据的 ready 只表示目标明确，prepare 返回 ready 并读完分段后才起草。needs_topic 只确认主题；recovery_required 用 bible_operation 恢复原操作，不猜面板选择。
+
+用户明确修改已有设定时，用 bible_revise_prepare 直接准备修订。普通提交中用 next_topic 将 next_prompt 交给新主题或已有开放主题，成功收据给出下一轮目标。必需关联用 required_related；新的事实追踪用 applied_facts 记录正文落实。完整合同见构筑参考。方向已经明确就直接落实，不强制出菜单或按轮数停下来整理。
+
 ### 无小票的桌面自然语言 RP
+
+用户明确新建时，先获取指定作品的项目 version 与 Profile ID，再走 new_session；此时还没有会话 version，不能先调用会话 status。完整参数及作品名／项目路径区别见 [新建会话与项目参数](../.agents/skills/story-bible-studio/references/roleplay-v3.md#新建会话与项目参数)。创建成功后再进入下面的 status → prepare 流程。
 
 与小票复用同一核心：目标明确时用 studio_status 获取会话 version（已有有效版本可省略），再 studio_prepare 一次。无 MCP 用结构化 CLI workbench --operation status/prepare，参数相同，默认短收据。不需要用户生成小票或启动服务器。目标不明只确认作品／会话，不枚举目录；面板选择不等于聊天目标。准备后的分段读取、commit_contract、提交与异常恢复完全沿用下面规则。不要退回传统 turn prepare 的整包读取路径。
 

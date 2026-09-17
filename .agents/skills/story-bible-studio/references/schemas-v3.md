@@ -4,6 +4,8 @@
 
 ## 项目与构筑
 
+项目定位：结构化 workbench／MCP 的 `project` 使用作品目录名，直接 CLI 的 `--project` 使用项目根目录路径（相对当前目录或绝对路径）。两者不要混用；新建会话的完整流程见 [RP 新建会话与项目参数](roleplay-v3.md#新建会话与项目参数)。路径错误和配置缺失不代表需要迁移。迁移按实际版本及待变更项判断，原生 v3 无变化返回 `already_v3`，不要求存在迁移记录。
+
 项目使用 schema_version: 3，保存 bible_status（building/revising/frozen）、story_scope、文风、日期锚点、会话默认值。构筑原稿保留在构筑/原始StoryBible.md；构筑/events.jsonl 追加保存构筑历史，decisions.json schema 2 保存主题、模块、题目摘要与操作投影，构筑状态.md 是可读台账。首次写入迁移保留原台账及 decisions-v1.backup.json，缺失原文与时间不补造。主题接口见 construction-workbench.md；构筑事件不属于 RP 的会话事件。
 
 StoryBible/ 是当前工作正史；正史版本/<hash>/ 是内容寻址的不可变快照，包含 Bible、基础写作配置及人物别名清单。固定人物 ID 默认沿用角色档案文件名；标题中的明确昵称和“别名／昵称”字段参与解析，冲突不猜测。

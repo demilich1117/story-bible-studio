@@ -53,14 +53,14 @@
 ## 直接生成：构筑与续玩共用
 
 1. 安装并登录所选平台的本地 CLI。**使用 Codex 时，可以直接双击根目录的 `启动Codex工作台.cmd`**：自动寻找原生 CLI、检查登录，尚未登录时引导授权，随后启动工作台。已登录时直接启动，不重复授权，也不用每次设置 CLI 路径。登录凭据由 Codex 管理，工作台不复制或保存凭据。退出账号、凭据失效或更换用户 / `CODEX_HOME` 后可能需要重新登录。也可在终端用 `codex --version`、`codex login status` 检查并用 `codex login` 登录。OpenCode 使用 `opencode --version` 检查，账号在该平台配置。桌面聊天已登录不一定代表 CLI 已登录。
-2. CLI 安装或环境修改后，重新启动工作台。在构筑详情或续玩输入框下，选择「Codex · 本地生成」或「OpenCode · 本地生成」，点击「检查生成连接」。
-3. 按需选择主模型和 Codex 推理强度，输入后点击「继续头脑风暴」「提出修订」「发送续玩」或「重生成」。小票自动交给 Agent，提交后页面更新。
+2. CLI 安装或环境修改后，重新启动工作台。在构筑详情或续玩输入框下，选择「Codex · 本地生成」「OpenCode · 本地生成」或「Antigravity · 本地生成」，点击「检查生成连接」。
+3. 按需选择主模型和推理强度，输入后点击「继续头脑风暴」「提出修订」「发送续玩」或「重生成」。小票自动交给 Agent，提交后页面更新。
 
 ### 模型选择
 
 选择生成平台后，可在「主模型」选择模型或手动填写模型 ID。**Codex 从本机 CLI 的 `app-server` / `model/list` 读取模型目录和支持的推理强度**，不创建聊天或生成正文；选择模型后，「推理强度」仅列出该模型支持的选项。模型目录不等于账号调用权限的保证，实际生成仍由 CLI 判断。OpenCode 本地模式读取 `opencode models`，共享后台读取该服务器已连接提供商的模型；使用 `provider/model` 格式。
 
-面板按工作区和连接方式记住模型，并按模型分别保存 Codex 推理强度。发送时显式传入 `--model` 和 `-c model_reasoning_effort="…"`，不修改平台全局配置。「使用平台默认模型（未指定）」和「使用 CLI 默认强度（未指定）」分别不传对应参数，由 CLI 配置决定。目录的模型建议强度与 CLI 配置默认值可能不同。
+面板按工作区和连接方式记住模型，并按模型分别保存各平台推理强度。Codex 发送时显式传入 `--model` 和 `-c model_reasoning_effort="…"`；Antigravity 使用 `--effort`，OpenCode 使用 `--variant`，不修改平台全局模型配置。「使用平台默认模型（未指定）」和「使用 CLI 默认强度（未指定）」分别不传对应参数，由 CLI 配置决定。目录的模型建议强度与 CLI 配置默认值可能不同。
 
 列表读取失败不会清空已有选择，可手动填写或重试「检查生成连接」。未知模型及未指定模型时，强度选项是否支持由 CLI 判断；已知模型不再支持保存的强度时，发送前提示重新选择。任务记录展示本次请求模型和强度；重试可更换选择，仍使用原小票。浏览器偏好被清理后需要重新选择。
 
@@ -83,6 +83,31 @@ Codex 使用 `workspace-write` 沙箱并将需额外审批的操作拒绝；Open
 任务状态存入工作区 `.workbench/agent-jobs/`，不进入故事事件或 Git；这里只保存任务元信息和对外回复，不保存工具输出或内部推理。页面偏好与最近任务索引在浏览器本地保存。清空浏览器数据会失去该索引，原小票和文件化事务仍保留。
 
 接口参考：[Codex 非交互模式](https://developers.openai.com/codex/noninteractive)、[OpenCode CLI](https://opencode.ai/docs/cli/)。本机 CLI 版本与登录状态需单独验证；模拟测试通过不代表真实模型已连通。
+
+## Antigravity · 本地生成
+
+需要独立的官方 `agy` CLI；编辑器的 `antigravity` 启动命令不支持此通道。按[官方安装说明](https://antigravity.google/docs/cli/getting-started/)安装，首次运行 `agy` 完成登录。工作台检查 PATH 与 Windows `%LOCALAPPDATA%/agy/bin/agy.exe`（其他系统 `~/.local/bin/agy`），也支持 `STORY_STUDIO_ANTIGRAVITY` 显式指定原生可执行文件。
+
+模型目录来自 `agy models`，推理强度可选低、中、高，通过 `--effort` 传入；默认选项不传参数。使用标准输入发送小票，读取 `init/step_update/result` JSON 事件，不续用旧平台聊天。记忆整理由当前主 Agent 负责。
+
+Windows 自定义安装目录可保存到用户环境变量 `STORY_STUDIO_ANTIGRAVITY`。工作台在当前进程没有该变量时也读取用户保存的位置，避免桌面启动器仍使用旧环境。自动检测同时兼容从 MSIX 版 Codex 安装后产生的应用缓存目录；正常安装位置优先。
+
+非交互模式无法弹出工具授权。可先预览本项目的核心命令权限，再显式应用：
+
+```powershell
+.\.venv-workbench\Scripts\python.exe -B workbench/configure_antigravity.py
+.\.venv-workbench\Scripts\python.exe -B workbench/configure_antigravity.py --apply
+```
+
+该命令在修改前备份已有 `~/.gemini/antigravity-cli/settings.json`，仅添加当前工作区绝对核心脚本的 `ticket/workbench` 命令规则，保留所有其他设置及 ask/deny 规则；不允许任意 Python 代码、复合命令或跳过全部权限。若已有 ask/deny 冲突，CLI 仍会拒绝执行。更换工作区路径后重新配置。
+
+返回退出码 0 或 `SUCCESS` 不能证明已提交，工作台仍以事件核心为准。权限受阻、登录失败或停止时保留原小票，可直接重试。日志只提取授权/登录提示，不保存工具输出及内部推理。独立 CLI 任务不保证显示在编辑器当前聊天中。
+
+接口依据：[Antigravity headless](https://antigravity.google/docs/cli/headless/)、[权限规则](https://antigravity.google/docs/cli/permissions/)。
+
+### OpenCode 推理强度
+
+OpenCode 本地模式用 `models --verbose` 获取模型 `variants`，共享后台从 `/provider` 获取相同能力；面板只显示该模型实际提供且未禁用的选项，包括自定义名称。选择后通过 `run --variant` 传入，本地和 `--attach` 均支持。没有可选档位、目录不可用或手填未知模型时使用 CLI 默认强度，不猜测模型支持的档位。刷新目录后已失效的保存值会提示重选。各平台均按模型保存强度，模型和强度随原小票重试记录一起保存，不改平台全局模型设置。
 
 ## OpenCode · 共享后台
 

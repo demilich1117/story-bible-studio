@@ -5,6 +5,7 @@ import json
 import contextlib
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -17,8 +18,12 @@ EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 def reasoning_value(provider, value):
     if value is None or value == "":
         return None
-    if provider != "codex" or not isinstance(value, str) or value not in EFFORTS:
-        raise StudioError("推理强度无效；请从 Codex 推理强度选项中选择。")
+    valid = isinstance(value, str) and (
+        (provider == "codex" and value in EFFORTS)
+        or (provider == "antigravity" and value in {"low", "medium", "high"})
+        or (provider in {"opencode", "opencode_server"} and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", value)))
+    if not valid:
+        raise StudioError("推理强度无效；请从当前平台和模型支持的选项中选择。")
     return value
 
 

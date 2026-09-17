@@ -18,6 +18,8 @@ from studio_construction_history import read_event
 from opencode_server import OpenCodeServer
 from codex_models import discover_models, reasoning_value
 from codex_cli import codex_executable
+import antigravity_cli
+from opencode_models import parse_catalog
 
 ACTIVE = {"starting", "running", "stopping"}
 
@@ -39,8 +41,10 @@ def opencode_installation():
 
 
 def executable(provider):
-    if provider not in {"codex", "opencode"}:
-        raise StudioError("请选择 Codex 或 OpenCode")
+    if provider not in {"codex", "opencode", "antigravity"}:
+        raise StudioError("请选择 Codex、OpenCode 或 Antigravity")
+    if provider == "antigravity":
+        return antigravity_cli.antigravity_executable()
     if provider == "codex":
         return codex_executable()
     value = os.environ.get("STORY_STUDIO_" + provider.upper()) or shutil.which(provider)
@@ -71,7 +75,8 @@ def model_id(provider, value):
 def platform_policy(provider):
     if provider == "codex":
         return "Platform: Codex."
-    return ("Platform: OpenCode; ignore Luna/subagents. The main agent handles compaction and recall; "
+    platform = "Antigravity" if provider == "antigravity" else "OpenCode"
+    return (f"Platform: {platform}; ignore Luna/subagents. The main agent handles compaction and recall; "
             "all memory thresholds still apply. Do not change story settings.")
 
 
@@ -79,12 +84,16 @@ def dispatch_prompt(workspace, ticket_path, provider):
     return (f"Follow {ROOT / 'workbench/agent-guide.md'} (read once per task). "
             "Execute only this ticket; its entry point already prepares or resumes the operation. "
             "Review and commit through the core before replying.\n"
-            + platform_policy(provider) + "\n\n" + short_ticket(workspace, Path(ticket_path)))
+            + platform_policy(provider)
+            + (" Use the ticket's CLI entry point. For core calls use python -B and the absolute story_studio.py path as a single command; use file tools for payload files. Do not use shell wrappers or compound commands." if provider == "antigravity" else "")
+            + "\n\n" + short_ticket(workspace, Path(ticket_path)))
 
 
 def command(provider, binary, workspace, prompt, server=None, platform_session=None, model=None, reasoning_effort=None):
     model = model_id(provider, model)
     reasoning_effort = reasoning_value(provider, reasoning_effort)
+    if provider == "antigravity":
+        return antigravity_cli.command(binary, prompt, model, reasoning_effort)
     if provider == "codex":
         return [binary, "exec", "--json", "--color", "never", "--sandbox", "workspace-write",
                 "-c", 'approval_policy="never"', "--skip-git-repo-check", "-C", str(workspace),
@@ -93,6 +102,8 @@ def command(provider, binary, workspace, prompt, server=None, platform_session=N
     args = [binary, "run", "--format", "json", "--dir", str(workspace)]
     if model:
         args += ["--model", model]
+    if reasoning_effort:
+        args += ["--variant", reasoning_effort]
     if provider == "opencode_server":
         args += ["--attach", server.url, "--session", platform_session]
     return [*args, prompt], None
@@ -110,10 +121,11 @@ class AgentRunner:
         self.cancel = threading.Event()
         self.closed = False
         self.codex_catalog = None
+        self.opencode_catalogs = {}
 
     def providers(self):
         rows = []
-        for name in ("codex", "opencode"):
+        for name in ("codex", "opencode", "antigravity"):
             try:
                 executable(name)
                 rows.append({"id": name, "available": True})
@@ -193,16 +205,20 @@ class AgentRunner:
         return job
 
     def models(self, provider):
+        if provider == "antigravity":
+            return antigravity_cli.discover_models(executable(provider), self.service.workspace)
         if provider == "codex":
             catalog = discover_models(executable("codex"), self.service.workspace)
             self.codex_catalog = catalog
             return catalog
         if provider == "opencode_server":
-            return OpenCodeServer.configured(self.service.workspace).models()
+            catalog = OpenCodeServer.configured(self.service.workspace).models()
+            self.opencode_catalogs[provider] = catalog
+            return catalog
         if provider != "opencode":
-            raise StudioError("请选择 Codex 或 OpenCode")
+            raise StudioError("请选择 Codex、OpenCode 或 Antigravity")
         try:
-            result = subprocess.run([executable("opencode"), "models"], cwd=self.service.workspace,
+            result = subprocess.run([executable("opencode"), "models", "--verbose"], cwd=self.service.workspace,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 encoding="utf-8", errors="replace", timeout=15, shell=False,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
@@ -210,23 +226,22 @@ class AgentRunner:
             raise StudioError("模型列表读取失败或超时；可重试，或手动填写 provider/model。") from None
         if result.returncode:
             raise StudioError("无法读取 OpenCode 模型列表；请检查 CLI 配置，或手动填写 provider/model。")
-        ids = set()
-        for line in result.stdout.splitlines():
-            try:
-                value = model_id(provider, line.strip())
-                if value:
-                    ids.add(value)
-            except StudioError:
-                continue
-        return {"models": [{"id": value, "name": value} for value in sorted(ids)],
-                "hint": "来自本机 OpenCode 模型列表；可用权限以平台账号为准。"}
+        catalog = {"models": parse_catalog(result.stdout), "supports_reasoning_effort": True,
+                   "hint": "来自本机 OpenCode 模型列表；推理强度仅列出模型提供的选项。"}
+        self.opencode_catalogs[provider] = catalog
+        return catalog
 
     def start(self, ticket_path, provider, retry=False, model=None, reasoning_effort=None):
         if type(retry) is not bool:
             raise StudioError("retry 必须为布尔值")
         model = model_id(provider, model)
         reasoning_effort = reasoning_value(provider, reasoning_effort)
-        if reasoning_effort and self.codex_catalog:
+        if reasoning_effort and provider.startswith("opencode"):
+            catalog = self.opencode_catalogs.get(provider) or self.models(provider)
+            selected = next((row for row in catalog["models"] if row["id"] == model), None)
+            if not selected or reasoning_effort not in selected.get("reasoning_efforts", []):
+                raise StudioError("所选 OpenCode 模型未提供此推理强度；请刷新模型目录后选择，或使用 CLI 默认强度。")
+        if reasoning_effort and provider == "codex" and self.codex_catalog:
             selected = next((row for row in self.codex_catalog["models"] if row["id"] == model), None)
             if selected and reasoning_effort not in selected["reasoning_efforts"]:
                 raise StudioError("所选模型不支持此推理强度，请重新选择。")
@@ -280,6 +295,8 @@ class AgentRunner:
                "status": "starting", "message": "正在启动 Agent", "reply": ""}
         proc = None
         watchdog = None
+        diagnostic_reader = None
+        diagnostic_flags = {}
         try:
             # One dispatch at a time across all workbench processes for this workspace.
             # This is a dispatch lock, separate from short-lived story transaction locks.
@@ -308,7 +325,7 @@ class AgentRunner:
                             return
                         sid = conn.create(f"Story Bible · {info['project']} · {job_id[:8]}")
                         self._save(job, platform_session=sid, server_url=conn.url, server_version=version)
-                        args, stdin = command(provider, binary, self.service.workspace, prompt, conn, sid, model)
+                        args, stdin = command(provider, binary, self.service.workspace, prompt, conn, sid, model, reasoning_effort)
                     else:
                         args, stdin = command(provider, binary, self.service.workspace, prompt, None, None, model, reasoning_effort)
                     env = os.environ.copy()
@@ -329,11 +346,15 @@ class AgentRunner:
                             self._save(job, server_pending=True)
                         self.process = subprocess.Popen(args, cwd=self.service.workspace, env=env,
                             stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE if provider == "antigravity" else subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", shell=False,
                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                             start_new_session=os.name != "nt")
                         proc = self.process
+                    if provider == "antigravity":
+                        diagnostic_reader = threading.Thread(target=antigravity_cli.read_diagnostics,
+                            args=(proc.stderr, diagnostic_flags), daemon=True)
+                        diagnostic_reader.start()
                     watchdog = threading.Timer(1800, lambda: self.stop(job_id))
                     watchdog.daemon = True
                     watchdog.start()
@@ -347,6 +368,9 @@ class AgentRunner:
                         except ValueError:
                             continue
                         if not isinstance(event, dict):
+                            continue
+                        if provider == "antigravity":
+                            antigravity_cli.consume_event(job, event)
                             continue
                         if event.get("type") == "thread.started" and not conn:
                             job["platform_session"] = event.get("thread_id")
@@ -365,6 +389,8 @@ class AgentRunner:
                         if conn:
                             job["reply"] = conn.redact(job["reply"])
                     code = proc.wait()
+                    if diagnostic_reader:
+                        diagnostic_reader.join(timeout=2)
                     if conn:
                         # Exiting the attached CLI alone is not proof the remote writer stopped.
                         self._settle_server(job, conn)
@@ -374,8 +400,9 @@ class AgentRunner:
                     elif self.cancel.is_set():
                         self._save(job, status="stopped", exit_code=code, message="生成已停止；已保存的草稿和小票仍保留。")
                     else:
-                        self._save(job, status="failed" if code else "incomplete", exit_code=code,
-                            message=f"Agent 已退出（{code}），尚未确认提交。检查下方回复或平台登录与权限后重试，也可复制恢复小票。")
+                        hint = antigravity_cli.diagnostic_hint(diagnostic_flags) if provider == "antigravity" else "检查下方回复或平台登录与权限后重试，也可复制恢复小票。"
+                        self._save(job, status="failed" if code or job.get("platform_error") else "incomplete", exit_code=code,
+                            message=f"Agent 已退出（{code}），尚未确认提交。{hint}")
                 except Exception as exc:
                     if proc and proc.poll() is None:
                         self._terminate(proc)
@@ -398,6 +425,10 @@ class AgentRunner:
             if watchdog:
                 watchdog.cancel()
             if proc:
+                if diagnostic_reader:
+                    diagnostic_reader.join(timeout=2)
+                if proc.stderr:
+                    proc.stderr.close()
                 if proc.stdout:
                     proc.stdout.close()
                 if proc.stdin and not proc.stdin.closed:

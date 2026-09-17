@@ -15,6 +15,7 @@ def create_mcp(root=ROOT):
         "Story Bible Studio 本地工具。按 studio://guide 接手（已加载本地 agent-guide.md 则不重读）。"
         "小票调用 studio_ticket 一次即准备或恢复原任务；按 kind/status 分流，主 Agent 审核并经核心提交。"
         "自然语言 RP 无小票时，明确作品和会话后用 studio_status 取版本，再 studio_prepare；已有有效版本可省略 status。"
+        "自然语言构筑已知主题直接 studio_bible_prepare；恢复指定作品用 studio_bible_continue；明确修订用 studio_bible_revise_prepare。"
         "按 context_parts 读取全部分段一次，遵循 commit_contract 提交成功后展示，不查目录或源码。"))
 
     @mcp.resource("studio://guide")
@@ -147,13 +148,29 @@ def create_mcp(root=ROOT):
         return service.bible_edit(project, action, **(payload or {}))
 
     @mcp.tool()
+    def studio_bible_continue(project: str, topic_id: str | None = None) -> dict:
+        """Resume a named project's chat construction: current topic/question or compact candidates. Read-only; never follows panel selection. Recovery takes priority."""
+        return service.bible_continue(project, topic_id)
+
+    @mcp.tool()
+    def studio_bible_revise_prepare(project: str, topic_id: str, user_text: str, expected_version: int,
+                                    related: list[str] | None = None, history_ids: list[str] | None = None,
+                                    budget: int | None = None, required_related: list[str] | None = None,
+                                    context_delivery: Literal['reference', 'inline'] = 'reference') -> dict:
+        """Prepare an explicitly requested revision directly, without a ticket. Retry original source/version/text safely. Read all context_parts; commit with original operation_id."""
+        p, _ = service.locate(project)
+        return deliver(p, service.bible_revise_prepare(project, topic_id, user_text, expected_version,
+                       related, history_ids, budget, required_related), context_delivery)
+
+    @mcp.tool()
     def studio_bible_prepare(project: str, topic_id: str | None = None, user_text: str | None = None,
                              request_id: str | None = None, prompt_id: str | None = None,
                              related: list[str] | None = None, history_ids: list[str] | None = None,
-                             budget: int | None = None, context_delivery: Literal['reference', 'inline'] = 'reference') -> dict:
+                             budget: int | None = None, context_delivery: Literal['reference', 'inline'] = 'reference',
+                             required_related: list[str] | None = None) -> dict:
         """Prepare one construction exchange. One context packet; old transcripts only by explicit IDs."""
         p, _ = service.locate(project)
-        return deliver(p, service.bible_prepare(project, topic_id, user_text, request_id, prompt_id, related, history_ids, budget), context_delivery)
+        return deliver(p, service.bible_prepare(project, topic_id, user_text, request_id, prompt_id, related, history_ids, budget, required_related), context_delivery)
 
     @mcp.tool()
     def studio_bible_commit(project: str, payload: dict) -> dict:

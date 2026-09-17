@@ -12,6 +12,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 from bootstrap import ROOT
 from studio_core import StudioError, atomic_write_json
+from opencode_models import variants
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -150,8 +151,9 @@ class OpenCodeServer:
                 if not isinstance(info, dict) or info.get("status") == "deprecated":
                     continue
                 name = info.get("name")
-                rows[value] = {"id": value, "name": f"{name} · {value}" if isinstance(name, str) else value}
-        return {"models": [rows[key] for key in sorted(rows)],
+                rows[value] = {"id": value, "name": f"{name} · {value}" if isinstance(name, str) else value,
+                               "reasoning_efforts": variants(info)}
+        return {"models": [rows[key] for key in sorted(rows)], "supports_reasoning_effort": True,
                 "hint": "来自共享后台已连接的提供商；选择后用于下一次生成。"}
 
     def abort(self, sid):

@@ -74,3 +74,42 @@ class BibleAuditTests(StudioCase):
         (self.project / 'StoryBible/语料/Mira Chen.md').unlink()
         errors = audit_bible(self.project, for_finalize=True)['errors']
         self.assertTrue(any('锚点角色缺少完整声线' in error for error in errors))
+
+    def test_character_hub_requires_valid_nonempty_anchors(self):
+        cfg = load_yaml(self.project / '项目配置.yaml')
+        cfg['story_scope']['anchors'] = []
+        write_yaml(self.project / '项目配置.yaml', cfg)
+        errors = audit_bible(self.project, for_finalize=True)['errors']
+        self.assertTrue(any('至少需要一个' in error for error in errors))
+
+        cfg['story_scope']['anchors'] = ['Mira Chen', 'mira chen', '../越界']
+        write_yaml(self.project / '项目配置.yaml', cfg)
+        errors = audit_bible(self.project, for_finalize=True)['errors']
+        self.assertTrue(any('重复角色 ID' in error for error in errors))
+        self.assertTrue(any('非法 story_scope 锚点' in error for error in errors))
+
+    def test_anchor_role_must_have_content_and_voice_cannot_be_orphaned(self):
+        role = self.project / 'StoryBible/角色/Mira Chen.md'
+        role.write_text('# Mira Chen\n', encoding='utf-8')
+        errors = audit_bible(self.project, for_finalize=True)['errors']
+        self.assertTrue(any('锚点角色档案仍为空骨架' in error for error in errors))
+
+        role.write_text('# Mira Chen\n\n修表师。\n', encoding='utf-8')
+        (self.project / 'StoryBible/语料/Orphan.md').write_text(
+            '# Orphan\n\n## 核心声线\n\n短句。\n\n## 对象覆盖：陌生人\n\n礼貌。\n\n'
+            '## 场景覆盖：日常\n\n直接。\n',
+            encoding='utf-8',
+        )
+        errors = audit_bible(self.project, for_finalize=True)['errors']
+        self.assertTrue(any('孤立语料缺少同名角色档案' in error for error in errors))
+
+    def test_frozen_bible_warns_when_readable_ledger_still_has_open_topics(self):
+        cfg = load_yaml(self.project / '项目配置.yaml')
+        cfg['bible_status'] = 'frozen'
+        write_yaml(self.project / '项目配置.yaml', cfg)
+        (self.project / '00-项目索引.md').write_text(
+            '# 测试\n\n- Story Bible：已冻结\n', encoding='utf-8')
+        (self.project / '构筑/构筑状态.md').write_text(
+            '# 构筑状态\n- 阶段：已冻结\n\n## 未收口人物｜open\n', encoding='utf-8')
+        warnings = audit_bible(self.project, for_finalize=True)['warnings']
+        self.assertTrue(any('仍有 open 主题' in warning for warning in warnings))

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import shutil
 from pathlib import Path
 from typing import Any
 
-from studio_core import StudioError, atomic_write_json, atomic_write_text, load_yaml, write_yaml
+from studio_core import StudioError, atomic_write_json, atomic_write_text, load_yaml, load_project_config, write_yaml
 from studio_profiles import (
     PROFILE_CONFIG,
     PROFILE_CONFIG_SCHEMA,
@@ -64,8 +63,7 @@ def _profile_source_names(project: Path) -> dict[str, str]:
 
 def inspect_project_v3(project: Path) -> dict[str, Any]:
     project = project.resolve()
-    if not (project / "项目配置.yaml").exists():
-        raise StudioError(f"不是 Story Studio 项目: {project}")
+    config = load_project_config(project, allow_legacy=True)
     locks = [path.relative_to(project).as_posix() for path in project.rglob(".session.lock")]
     legacy_input = project / "输入"
     source_names = _profile_source_names(project)
@@ -114,11 +112,22 @@ def inspect_project_v3(project: Path) -> dict[str, Any]:
     if root.exists():
         for profile in sorted(item for item in root.iterdir() if item.is_dir() and (item / PROFILE_CONFIG).exists()):
             opening = profile / PROFILE_FILES["开场候选"]
-            if opening.exists():
-                profiles.append(profile.name)
+            if opening.is_file():
+                profile_config = load_yaml(profile / PROFILE_CONFIG)
+                before = opening.read_text(encoding="utf-8")
+                normalized = normalize_openings(before, str(profile_config.get("display_name", profile.name)))
+                if normalized != before.strip() or profile_config.get("schema_version") != PROFILE_CONFIG_SCHEMA:
+                    profiles.append(profile.name)
+    legacy_roots = [project / "输入", project / "故事" / "时间线", project / "故事" / "独立测试", project / "故事" / "待编排片段"]
+    legacy_directories = [path.relative_to(project).as_posix() for path in legacy_roots if path.exists()]
+    changes_needed = config["schema_version"] != 3 or bool(legacy_directories or profiles) or "default_timeline" in config
     return {
-        "status": "blocked" if locks or unknown else "ready",
+        "status": "blocked" if locks or unknown else "ready" if changes_needed else "already_v3",
         "project": str(project),
+        "source_schema_version": config["schema_version"],
+        "target_schema_version": 3,
+        "changes_needed": changes_needed,
+        "legacy_directories": legacy_directories,
         "locks": locks,
         "unknown_input_files": unknown,
         "preserve_moves": preserved,
@@ -160,13 +169,8 @@ def _normalize_profile(project: Path, profile: Path) -> dict[str, str]:
 
 def migrate_project_v3(project: Path, apply: bool = False) -> dict[str, Any]:
     project = project.resolve()
-    existing_manifest = project / "构筑" / "迁移记录-v3.json"
-    current_config = load_yaml(project / "项目配置.yaml")
-    legacy_roots = [project / "输入", project / "故事" / "时间线", project / "故事" / "独立测试", project / "故事" / "待编排片段"]
-    if int(current_config.get("schema_version", 0)) == 3 and not any(path.exists() for path in legacy_roots) and existing_manifest.exists():
-        return json.loads(existing_manifest.read_text(encoding="utf-8"))
     report = inspect_project_v3(project)
-    if not apply:
+    if not apply or report["status"] == "already_v3":
         return report
     if report["status"] == "blocked":
         details = report["locks"] + report["unknown_input_files"]

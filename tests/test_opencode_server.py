@@ -97,15 +97,15 @@ class SharedServerTests(StudioCase):
         atomic_write_json(self.root / ".workbench/opencode-server.json",
                           {"url": self.url, "username": "opencode", "password": "test-password"})
 
-    def launch(self, ticket, mode="commit", retry=False, model=None):
+    def launch(self, ticket, mode="commit", retry=False, model=None, reasoning_effort=None):
         self.captured = {}
-        def fake_command(provider, binary, workspace, prompt, conn, sid, model=None):
-            args, stdin = command(provider, binary, workspace, prompt, conn, sid, model)
+        def fake_command(provider, binary, workspace, prompt, conn, sid, model=None, reasoning_effort=None):
+            args, stdin = command(provider, binary, workspace, prompt, conn, sid, model, reasoning_effort)
             self.captured.update(args=args, sid=sid, prompt=prompt)
             return [sys.executable, "-B", str(Path(__file__).with_name("test_agent_runner.py")),
                     "--fake", str(self.root), ticket["ticket_path"], mode, "shared:" + sid], None
         with patch("agent_runner.executable", return_value=sys.executable), patch("agent_runner.command", side_effect=fake_command):
-            job = self.runner.start(ticket["ticket_path"], "opencode_server", retry, model=model)
+            job = self.runner.start(ticket["ticket_path"], "opencode_server", retry, model=model, reasoning_effort=reasoning_effort)
             # Keep patch in place until the worker has consumed it.
             import time
             end = time.monotonic() + 5
@@ -115,7 +115,7 @@ class SharedServerTests(StudioCase):
 
     def test_shared_models_only_expose_connected_ids_and_names(self):
         result = self.runner.models("opencode_server")
-        self.assertEqual([{"id": "vendor/model-a", "name": "Model A · vendor/model-a"}], result["models"])
+        self.assertEqual([{"id": "vendor/model-a", "name": "Model A · vendor/model-a", "reasoning_efforts": []}], result["models"])
         self.assertNotIn("private-key", json.dumps(result))
         self.assertEqual(0, self.backend.created)
         self.assertEqual(str(self.root), self.backend.calls[-1][2]["directory"][0])
@@ -128,6 +128,14 @@ class SharedServerTests(StudioCase):
         args = self.captured["args"]
         self.assertEqual("vendor/model-a", args[args.index("--model") + 1])
         self.assertIn("ignore Luna/subagents", self.captured["prompt"])
+
+    def test_shared_reasoning_variant_is_forwarded_and_recorded(self):
+        self.runner.opencode_catalogs["opencode_server"] = {"models": [{"id": "vendor/model-a", "reasoning_efforts": ["high"]}]}
+        job = self.finish(self.launch(self.ticket(), model="vendor/model-a", reasoning_effort="high"))
+        self.assertEqual("completed", job["status"], job)
+        self.assertEqual("high", job["reasoning_effort"])
+        args = self.captured["args"]
+        self.assertEqual("high", args[args.index("--variant") + 1])
 
     def test_attached_roundtrip_records_session_and_confirms_core(self):
         req = self.ticket()

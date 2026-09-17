@@ -90,6 +90,8 @@ def fold(state, event):
     else:
         for key in ("topics", "modules", "operations", "prompts"):
             state.setdefault(key, {}).update(deepcopy(data.get(key, {})))
+        if "conversation" in data:
+            state["conversation"] = deepcopy(data["conversation"])
         if data.get("record"):
             record = deepcopy(data["record"])
             record.update(id=event["id"], created_at=event["created_at"], kind=event["kind"])

@@ -340,5 +340,22 @@ class MCPProtocolTests(__import__('unittest').TestCase):
                     viewed = await call('studio_bible_view', {'project': project.name, 'topic_id': topic['id'],
                         'event_id': prepared['operation_id']})
                     self.assertEqual('先比较几个方向。', viewed['event']['data']['transcript']['user'])
+                    self.assertIn('studio_bible_continue', [t.name for t in tools.tools])
+                    self.assertIn('studio_bible_revise_prepare', [t.name for t in tools.tools])
+                    continued = await call('studio_bible_continue', {'project': project.name})
+                    self.assertEqual(topic['id'], continued['topic_id'])
+                    self.assertEqual('那位熟客是谁？', continued['prompt']['question'])
+                    revision = await call('studio_bible_revise_prepare', {'project': project.name,
+                        'topic_id': topic['id'], 'expected_version': continued['topic_version'], 'user_text': '改为一位旅人',
+                        'required_related': ['核心概念.md']})
+                    self.assertEqual('ready', revision['status'])
+                    self.assertTrue(revision['context_parts'])
+                    await call('studio_bible_commit', {'project': project.name, 'payload': {
+                        'operation_id': revision['operation_id'], 'status': 'open', 'decision': '正在考虑旅人。',
+                        'assistant_text': '先比较旅人的来历。', 'applied_facts': [],
+                        'next_topic': {'title': '旅人的来历', 'module': '世界设定.md'},
+                        'next_prompt': {'question': '旅人从哪里来？', 'options': {'1': '海边'}}}})
+                    continued = await call('studio_bible_continue', {'project': project.name})
+                    self.assertEqual('旅人的来历', continued['title'])
                     self.assertEqual(original_events, session_events.read_bytes())
         with tempfile.TemporaryDirectory() as root:asyncio.run(check(Path(root)))

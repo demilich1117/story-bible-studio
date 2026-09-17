@@ -8,6 +8,8 @@
 
 Story Bible 构筑桌可依用户操作保存灵感、草稿和修订请求，正史修改仍由主 Agent 审核提交。构筑历史独立追加到 `构筑/events.jsonl`，不混入 RP 会话。普通构筑每轮一次准备、一次提交，同时保存对外问答、决策和下一题；导图由本地程序生成，不新增模型整理或全局召回。主题接口见技能的 `references/construction-workbench.md`。
 
+桌面自然语言构筑已知主题直接 bible_prepare；新聊天恢复指定作品用 bible_continue，不猜面板选择。转题通过同次 commit 的 next_topic 与 next_prompt 保存，明确修订通过 bible_revise_prepare 直接接手；必需关联用 required_related，新的事实落实追踪用 applied_facts。用户方向明确时直接落实，不强制菜单或固定轮数整理。MCP 与结构化 CLI 共用以上操作。
+
 本工作区的同等核心任务是文学创作、连续角色扮演与 Story Bible 构筑。Story Bible 服务于创作，不是最终交付物。
 
 处理这些任务时使用 `.agents/skills/story-bible-studio/SKILL.md`。v3 会话统一通过 `story_studio.py` 写入事件并渲染 Markdown；每个 `会话/<ID>/` 都是封闭动态上下文，不读取其他会话、Profile 工作区或旧上下文包。不要手工伪造回合、变体或检查点。保持重要信息文件化，不把自动上下文压缩当成唯一记忆来源。除非用户明确要求，不要构筑或打包 SillyTavern 角色卡。
