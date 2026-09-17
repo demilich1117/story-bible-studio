@@ -176,9 +176,75 @@ python -m venv .venv-workbench
 
 桌面端登录与 CLI 登录需要分别确认；本地生成也不会自动显示到已有桌面聊天中。连接与模型设置的详细说明见[直接生成指南](workbench/README.md#直接生成构筑与续玩共用)。
 
+### 安装平台 CLI（Windows）
+
+**只安装你准备使用的平台即可，不需要三个都装。** 已能在工作台正常生成的用户可以跳过对应安装步骤。下面的命令在普通 PowerShell 或 Windows Terminal 中运行；安装完成后重新打开终端，再启动工作台。
+
+#### Codex
+
+已经安装 Codex 桌面版时，先双击 `启动Codex工作台.cmd`。如果它能找到 CLI 并完成登录，就可以直接使用。
+
+需要单独安装时，可按 [Codex 官方安装指南](https://developers.openai.com/codex/cli/)选择 Windows 安装方式。如果电脑已有 Node.js 和 npm，也可执行：
+
+```powershell
+npm.cmd install -g @openai/codex
+```
+
+没有 npm 时，先从 [Node.js 官网](https://nodejs.org/)安装 LTS 版本，重新打开终端，用 `node --version` 和 `npm.cmd --version` 检查。安装 Codex 后执行：
+
+```powershell
+codex --version
+codex login
+codex login status
+```
+
+按提示完成账号授权，然后双击 `启动Codex工作台.cmd`，选择 **“Codex · 本地生成”** 并检查连接。若 PowerShell 提示禁止运行 `codex.ps1`，可在上面的命令中将 `codex` 改为 `codex.cmd`；工作台会寻找其对应的原生程序。
+
+#### OpenCode
+
+按 [OpenCode 官方安装指南](https://opencode.ai/docs/#windows)选择 Windows 安装方式。已经安装 Scoop 的用户可以执行：
+
+```powershell
+scoop install opencode
+```
+
+没有 Scoop 时，可从官方指南链接的 Releases 下载 Windows 原生可执行文件，放在固定目录，并将该目录加入用户 PATH。当前工作台的共享后台支持 **OpenCode 1.x**，已验证版本为 **1.18.30**；下载时核对版本，不要直接换成未经本项目适配的大版本。
+
+安装后重新打开终端，依次执行：
+
+```powershell
+opencode --version
+opencode auth login
+opencode auth list
+opencode models
+```
+
+按所选模型服务的提示完成授权或配置凭据；不同服务的登录方式和可用模型可能不同，详见[官方登录说明](https://opencode.ai/docs/cli/#auth)。凭据只在平台自己的流程中填写。
+
+随后双击 `启动工作台.cmd`，选择 **“OpenCode · 本地生成”** 并检查连接。模型使用 `provider/model` 格式。如果希望桌面端也能查找工作台创建的生成会话，再按[共享后台说明](workbench/README.md#opencode--共享后台)配置。
+
+官方也提供 npm 安装方式，但 Windows 工作台只运行原生 `.exe` / `.com`，不能把 `opencode.cmd` 或 `.ps1` 当作生成程序。如果已有 npm 安装，请让助手查找包内的原生程序，并通过 `STORY_STUDIO_OPENCODE` 指定其绝对路径。
+
+#### Antigravity
+
+按 [Antigravity 官方安装指南](https://antigravity.google/docs/cli/getting-started/)，在 PowerShell 中执行官方安装命令：
+
+```powershell
+irm https://antigravity.google/cli/install.ps1 | iex
+```
+
+完成后重新打开终端，检查版本并进入首次设置：
+
+```powershell
+agy --version
+agy
+```
+
+按提示完成登录和工作区设置。然后继续下面的项目授权步骤。`agy` 是独立 CLI；编辑器的 `antigravity` 启动命令不能替代它。
+
 ### 第一次使用 Antigravity 直接生成
 
-1. 按 [Antigravity 官方安装说明](https://antigravity.google/docs/cli/getting-started/)安装独立 CLI。在新开的终端运行 `agy --version` 检查，再运行 `agy` 确认登录。仅安装编辑器、能运行 `antigravity` 命令，还不能使用这个生成入口。
+1. 完成上面的 Antigravity CLI 安装和登录。在工作台中使用的账号与模型权限，以这个 CLI 的实际登录状态为准。
 2. 在项目文件夹打开 PowerShell，执行下面两行。第一行预览需要添加的权限，第二行保存配置，让 Agent 可以通过项目核心读取小票和提交结果。
 
    ```powershell
